@@ -65,6 +65,12 @@
   .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--good),var(--accent),var(--bad));transition:width .05s linear}
   .bpm{font-size:28px;font-weight:800;min-width:70px;text-align:center}
   button.live{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
+  .seg.four{grid-template-columns:repeat(4,1fr)}
+  .favs{display:flex;flex-wrap:wrap;gap:6px}
+  .fav{min-height:36px;padding:4px 10px;font-size:14px;border-radius:20px;display:inline-flex;align-items:center;gap:6px}
+  .fav.cur{border-color:var(--accent);color:var(--accent)}
+  .fav .x{opacity:.55;font-size:12px}
+  .timerV{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700}
 </style>
 </head>
 <body>
@@ -99,7 +105,14 @@
     <label class="lbl"><span>Brightness</span><span id="mBriV">100%</span></label>
     <input type="range" min="1" max="100" value="100" id="mBri">
   </div>
-  <p class="meta" style="margin:0">Master controls apply to every connected light with "In All" checked.</p>
+  <div class="row space">
+    <span class="meta">Sleep timer <span class="timerV" id="sleepV"></span></span>
+    <select id="sleepSel" style="width:auto">
+      <option value="0">Off</option><option value="5">5 min</option><option value="15">15 min</option>
+      <option value="30">30 min</option><option value="60">1 hour</option><option value="90">90 min</option><option value="120">2 hours</option>
+    </select>
+  </div>
+  <p class="meta" style="margin:0">Master controls apply to every connected light with "In All" checked. The sleep timer turns those lights off when it ends, as long as this page stays open.</p>
 </section>
 
 <section class="card stack" id="sound">
@@ -109,11 +122,13 @@
   </div>
   <div>
     <label class="lbl"><span>Effect</span></label>
-    <div class="seg" id="sndMode">
-      <button data-m="pulse" class="sel">Pulse</button>
-      <button data-m="beats">Color on beat</button>
+    <div class="seg four" id="sndMode">
+      <button data-m="pulse" class="sel">Energy</button>
+      <button data-m="beats">Rhythm</button>
+      <button data-m="roll">Roll</button>
       <button data-m="spectrum">Spectrum</button>
     </div>
+    <p class="meta" id="sndHelp" style="margin:6px 0 0">Energy: brightness follows the volume, in the master hue.</p>
   </div>
   <div class="row">
     <button class="grow" id="micBtn">🎤 Listen with mic</button>
@@ -134,7 +149,7 @@
     </div>
     <p class="meta" style="margin:8px 0 0">Tap along with the music four or more times, then Start. The lights pulse on every beat.</p>
   </details>
-  <p class="meta" style="margin:0">Sound mode drives every light with "In All" checked. Pulse uses the master hue.</p>
+  <p class="meta" style="margin:0">Sound mode drives every light with "In All" checked. Keep this page open while it runs.</p>
 </section>
 
 <div id="lights"></div>
@@ -363,6 +378,7 @@ class Light {
   /* ---- high-level actions (translate to each protocol) ---- */
   power(on){ this.s.on = on; this.send(this.type==='elk' ? ELK.power(on) : this.type==='govee' ? GOVEE.power(on) : FAIRY.power(on)); this.paint(); }
   color(h, sat, live){
+    if (this.loop) this.stopLoop();
     Object.assign(this.s, {h, sat, mode:'color', on:true});
     let b;
     if (this.type==='elk'){ b = ELK.color(...hsvToRgb(h, sat, 100)); }
@@ -382,7 +398,42 @@ class Light {
   }
   effect(code){ this.s.effect = code; this.s.mode='effect'; this.send(ELK.effect(code)); }
   speed(v, live){ this.s.speed = v; const b = ELK.speed(v); live ? this.sendLatest('speed', b) : this.send(b); }
-  scene(n){ this.s.scene = n; this.s.mode='scene'; this.send(FAIRY.scene(n, this.s.v)); }
+  scene(n){ this.s.scene = n; this.s.mode='scene'; this.send(FAIRY.scene(n, this.s.v));
+    if (this.el){ const i = $('.sceneIn', this.el); if (i && document.activeElement!==i) i.value = n; this.renderFavs(); } }
+
+  /* ---- Hello Fairy favorites + loop (runs while the page is open) ---- */
+  favs(){ return [...((store.get()[this.id]||{}).favs || [])]; }
+  renderFavs(){
+    const box = this.el && $('.favs', this.el); if (!box) return;
+    const favs = this.favs();
+    box.innerHTML = favs.length ? favs.map(n =>
+      `<button class="fav${n===this.s.scene?' cur':''}" data-n="${n}">★ ${n}<span class="x" data-del="${n}">✕</span></button>`).join('')
+      : '<span class="meta">Play a scene you like, then tap ★ Save scene. Loop with no favorites cycles all scenes.</span>';
+    box.querySelectorAll('.fav').forEach(b => b.onclick = e => {
+      const del = e.target.dataset.del;
+      if (del){ store.patch(this.id,{favs:this.favs().filter(x => x!==+del)}); this.renderFavs(); return; }
+      this.scene(+b.dataset.n);
+    });
+  }
+  startLoop(){
+    this.stopLoop(true);
+    const sec = (store.get()[this.id]||{}).loopSec || 30;
+    const step = () => {
+      const list = this.favs().length ? this.favs() : Array.from({length:FAIRY_SCENES}, (_,i) => i+1);
+      const i = list.indexOf(this.s.scene);
+      this.scene(list[(i+1) % list.length]);
+    };
+    step(); this.loop = setInterval(step, sec*1000);
+    const b = this.el && $('.loopBtn', this.el);
+    if (b){ b.classList.add('live'); b.textContent = `⟳ Looping ${this.favs().length ? 'favorites' : 'all scenes'} — tap to stop`; }
+    log(`${this.name}: looping every ${sec}s`);
+  }
+  stopLoop(quiet){
+    clearInterval(this.loop); this.loop = null;
+    const b = this.el && $('.loopBtn', this.el);
+    if (b){ b.classList.remove('live'); b.textContent = '⟳ Loop favorites'; }
+    if (!quiet) log(`${this.name}: loop stopped`);
+  }
 
   /* ---- UI ---- */
   setStatus(text){
@@ -444,6 +495,16 @@ class Light {
       : `
         <div class="row space"><span class="meta">Scene (1–${FAIRY_SCENES})</span>
           <div class="stepper"><button class="sm prev">◀</button><input class="sceneIn" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="${FAIRY_SCENES}" value="${this.s.scene}" aria-label="Scene number"><button class="sm next">▶</button><button class="sm play">Play</button></div>
+        </div>
+        <div class="row space"><span class="meta">Favorites</span>
+          <button class="sm favAdd">★ Save scene</button></div>
+        <div class="favs"></div>
+        <div class="row">
+          <select class="loopSec" style="width:auto">
+            <option value="5">every 5 s</option><option value="10">every 10 s</option><option value="20">every 20 s</option>
+            <option value="30" selected>every 30 s</option><option value="60">every 1 min</option><option value="300">every 5 min</option>
+          </select>
+          <button class="grow loopBtn">⟳ Loop favorites</button>
         </div>`}
       <details><summary>Advanced</summary>
         <div class="row" style="margin-top:6px">
@@ -478,13 +539,22 @@ class Light {
       q('.prev').onclick = () => { this.scene(this.s.scene<=1?FAIRY_SCENES:this.s.scene-1); show(); };
       q('.next').onclick = () => { this.scene(this.s.scene>=FAIRY_SCENES?1:this.s.scene+1); show(); };
       q('.play').onclick = jump;
+      this.renderFavs();
+      q('.favAdd').onclick = () => {
+        const n = this.s.scene; const favs = this.favs();
+        if (!favs.includes(n)) { favs.push(n); store.patch(this.id,{favs}); }
+        this.renderFavs();
+      };
+      q('.loopSec').value = String((store.get()[this.id]||{}).loopSec || 30);
+      q('.loopSec').onchange = e => { store.patch(this.id,{loopSec:+e.target.value}); if (this.loop) this.startLoop(); };
+      q('.loopBtn').onclick = () => this.loop ? this.stopLoop() : this.startLoop();
     }
     q('.sendRaw').onclick = () => {
       const bytes = q('.raw').value.replace(/0x/gi,'').replace(/[^0-9a-f]/gi,'').match(/.{2}/g);
       if (bytes) this.send(bytes.map(x=>parseInt(x,16)));
     };
     q('.forget').onclick = () => {
-      this.manualDisconnect = true; clearInterval(this.ka);
+      this.manualDisconnect = true; clearInterval(this.ka); this.stopLoop?.(true);
       try { this.device.gatt.disconnect(); } catch {}
       lights.delete(this.id); this.el.remove(); updateCount();
     };
@@ -556,13 +626,39 @@ $('#mBri').oninput = e => {
 $('#addBtn').onclick = () => addLight(false);
 $('#addAllBtn').onclick = () => addLight(true);
 
+/* ---- sleep timer ---- */
+const sleep = { end:0, t:null };
+function sleepTick(){
+  const left = sleep.end - Date.now();
+  if (left <= 0){
+    clearInterval(sleep.t); sleep.t = null; $('#sleepV').textContent = ''; $('#sleepSel').value = '0';
+    stopSound(); lights.forEach(l => l.stopLoop?.(true));
+    targets().forEach(l => l.power(false)); log('Sleep timer: lights off');
+    return;
+  }
+  const m = Math.floor(left/60000), s = Math.floor(left/1000)%60;
+  $('#sleepV').textContent = `${m}:${String(s).padStart(2,'0')}`;
+}
+$('#sleepSel').onchange = e => {
+  clearInterval(sleep.t); sleep.t = null; $('#sleepV').textContent = '';
+  const min = +e.target.value; if (!min) { log('Sleep timer off'); return; }
+  sleep.end = Date.now() + min*60000; sleepTick(); sleep.t = setInterval(sleepTick, 1000);
+  log(`Sleep timer: ${min} min`);
+};
+
 /* ---- sound mode ---- */
-const snd = { mode:'pulse', src:null, ctx:null, an:null, stream:null, timer:null, data:null,
+const SND_HELP = {
+  pulse:'Energy: brightness follows the volume, in the master hue.',
+  beats:'Rhythm: jumps to a new color on every kick, then fades.',
+  roll:'Roll: colors keep rolling around the wheel, faster when the music is louder.',
+  spectrum:'Spectrum: bass drives red, mids drive green, highs drive blue.' };
+const snd = { rollHue:0, mode:'pulse', src:null, ctx:null, an:null, stream:null, timer:null, data:null,
   level:0, bass:0, mid:0, treb:0, avg:0, lastBeat:0, beatHue:0, flash:0, bpm:120, taps:[], nextBeat:0 };
 
 $('#sndMode').onclick = e => {
   const b = e.target.closest('button'); if(!b) return;
   snd.mode = b.dataset.m;
+  $('#sndHelp').textContent = SND_HELP[snd.mode];
   [...$('#sndMode').children].forEach(x => x.classList.toggle('sel', x===b));
 };
 $('#sens').oninput = e => $('#sensV').textContent = e.target.value + '%';
@@ -644,6 +740,9 @@ function tick(){
     h = +$('#mHue').value; s = 100; v = Math.max(floor, snd.level);
   } else if (snd.mode === 'beats'){
     h = snd.beatHue; s = 100; v = Math.max(floor, Math.max(snd.flash, snd.level*0.7));
+  } else if (snd.mode === 'roll'){
+    snd.rollHue = (snd.rollHue + 1.5 + snd.level*14 + (beat?25:0)) % 360;
+    h = Math.round(snd.rollHue); s = 100; v = Math.max(0.25, snd.level);
   } else {
     rgb = [snd.bass, snd.mid, snd.treb].map(x => Math.round(Math.max(floor, x)*255));
     if (snd.src === 'bpm') rgb = hsvToRgb(snd.beatHue, 100, Math.max(floor, snd.level)*100);
