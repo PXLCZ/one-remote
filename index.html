@@ -57,7 +57,7 @@
   .chk{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--dim)}
   .chk input{width:20px;height:20px;accent-color:var(--accent)}
   .stepper{display:flex;gap:8px;align-items:center}
-  .stepper output{min-width:70px;text-align:center;font-weight:700}
+  .stepper input{width:64px;min-height:40px;text-align:center;font:700 18px/1 inherit;font-family:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:4px}
   .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
   .seg button{min-height:40px;padding:6px;font-size:14px}
   .seg button.sel{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
@@ -394,7 +394,7 @@ class Light {
           <input type="range" class="spd" min="0" max="100" value="${this.s.speed}"></div>`
       : `
         <div class="row space"><span class="meta">Scene (1–${FAIRY_SCENES})</span>
-          <div class="stepper"><button class="sm prev">◀</button><output class="sceneV">${this.s.scene}</output><button class="sm next">▶</button><button class="sm play">Play</button></div>
+          <div class="stepper"><button class="sm prev">◀</button><input class="sceneIn" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="${FAIRY_SCENES}" value="${this.s.scene}" aria-label="Scene number"><button class="sm next">▶</button><button class="sm play">Play</button></div>
         </div>`}
       <details><summary>Advanced</summary>
         <div class="row" style="margin-top:6px">
@@ -415,10 +415,16 @@ class Light {
       q('.fx').onchange = e => { if(e.target.value) this.effect(+e.target.value); };
       q('.spd').oninput = e => this.speed(+e.target.value, true);
     } else {
-      const show = () => q('.sceneV').textContent = this.s.scene;
+      const show = () => q('.sceneIn').value = this.s.scene;
+      const jump = () => { const n = parseInt(q('.sceneIn').value, 10);
+        if (Number.isFinite(n)) this.scene(Math.min(FAIRY_SCENES, Math.max(1, n))); show(); };
+      // type a number and hit Go/Done (or tap away) to jump straight to that scene
+      q('.sceneIn').onchange = jump;
+      q('.sceneIn').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); q('.sceneIn').blur(); } };
+      q('.sceneIn').onfocus = e => e.target.select();
       q('.prev').onclick = () => { this.scene(this.s.scene<=1?FAIRY_SCENES:this.s.scene-1); show(); };
       q('.next').onclick = () => { this.scene(this.s.scene>=FAIRY_SCENES?1:this.s.scene+1); show(); };
-      q('.play').onclick = () => this.scene(this.s.scene);
+      q('.play').onclick = jump;
     }
     q('.sendRaw').onclick = () => {
       const bytes = q('.raw').value.replace(/0x/gi,'').replace(/[^0-9a-f]/gi,'').match(/.{2}/g);
