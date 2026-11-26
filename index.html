@@ -58,6 +58,13 @@
   .chk input{width:20px;height:20px;accent-color:var(--accent)}
   .stepper{display:flex;gap:8px;align-items:center}
   .stepper output{min-width:70px;text-align:center;font-weight:700}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .seg button{min-height:40px;padding:6px;font-size:14px}
+  .seg button.sel{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
+  .meter{height:10px;border-radius:6px;background:var(--line);overflow:hidden}
+  .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--good),var(--accent),var(--bad));transition:width .05s linear}
+  .bpm{font-size:28px;font-weight:800;min-width:70px;text-align:center}
+  button.live{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
 </style>
 </head>
 <body>
@@ -93,6 +100,41 @@
     <input type="range" min="1" max="100" value="100" id="mBri">
   </div>
   <p class="meta" style="margin:0">Master controls apply to every connected light with "In All" checked.</p>
+</section>
+
+<section class="card stack" id="sound">
+  <div class="row space">
+    <h2>Sound mode</h2>
+    <button class="sm" id="sndStop" hidden>Stop</button>
+  </div>
+  <div>
+    <label class="lbl"><span>Effect</span></label>
+    <div class="seg" id="sndMode">
+      <button data-m="pulse" class="sel">Pulse</button>
+      <button data-m="beats">Color on beat</button>
+      <button data-m="spectrum">Spectrum</button>
+    </div>
+  </div>
+  <div class="row">
+    <button class="grow" id="micBtn">🎤 Listen with mic</button>
+  </div>
+  <div class="meter"><i id="lvl"></i></div>
+  <div>
+    <label class="lbl"><span>Sensitivity</span><span id="sensV">60%</span></label>
+    <input type="range" min="5" max="100" value="60" id="sens">
+  </div>
+  <details>
+    <summary>No mic? Use tap tempo (BPM)</summary>
+    <div class="row space" style="margin-top:8px">
+      <button class="sm" id="bpmDown">−</button>
+      <span class="bpm" id="bpmV">120</span>
+      <button class="sm" id="bpmUp">+</button>
+      <button class="grow" id="tapBtn">Tap</button>
+      <button class="sm" id="bpmGo">Start</button>
+    </div>
+    <p class="meta" style="margin:8px 0 0">Tap along with the music four or more times, then Start. The lights pulse on every beat.</p>
+  </details>
+  <p class="meta" style="margin:0">Sound mode drives every light with "In All" checked. Pulse uses the master hue.</p>
 </section>
 
 <div id="lights"></div>
@@ -454,6 +496,123 @@ $('#mBri').oninput = e => {
 
 $('#addBtn').onclick = () => addLight(false);
 $('#addAllBtn').onclick = () => addLight(true);
+
+/* ---- sound mode ---- */
+const snd = { mode:'pulse', src:null, ctx:null, an:null, stream:null, timer:null, data:null,
+  level:0, bass:0, mid:0, treb:0, avg:0, lastBeat:0, beatHue:0, flash:0, bpm:120, taps:[], nextBeat:0 };
+
+$('#sndMode').onclick = e => {
+  const b = e.target.closest('button'); if(!b) return;
+  snd.mode = b.dataset.m;
+  [...$('#sndMode').children].forEach(x => x.classList.toggle('sel', x===b));
+};
+$('#sens').oninput = e => $('#sensV').textContent = e.target.value + '%';
+
+async function startMic(){
+  stopSound();
+  const gum = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  if (!gum){ showError('This browser does not allow microphone access. Use tap tempo (BPM) below instead.'); return; }
+  try {
+    snd.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  } catch(e){ showError(`Microphone blocked: ${errText(e)}. Check Settings → Bluefy → Microphone, or use tap tempo.`); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  snd.ctx = new AC(); await snd.ctx.resume?.();
+  snd.an = snd.ctx.createAnalyser(); snd.an.fftSize = 1024; snd.an.smoothingTimeConstant = 0.6;
+  snd.ctx.createMediaStreamSource(snd.stream).connect(snd.an);
+  snd.data = new Uint8Array(snd.an.frequencyBinCount);
+  snd.src = 'mic'; begin();
+  log('Sound mode: listening with microphone');
+}
+
+function startBpm(){
+  stopSound();
+  snd.src = 'bpm'; snd.nextBeat = performance.now(); begin();
+  log(`Sound mode: ${snd.bpm} BPM`);
+}
+
+function begin(){
+  $('#sndStop').hidden = false;
+  $('#micBtn').classList.toggle('live', snd.src==='mic');
+  $('#micBtn').textContent = snd.src==='mic' ? '🎤 Listening…' : '🎤 Listen with mic';
+  $('#bpmGo').classList.toggle('live', snd.src==='bpm');
+  $('#bpmGo').textContent = snd.src==='bpm' ? 'Running' : 'Start';
+  snd.timer = setInterval(tick, 50);   // ~20 updates/sec; Bluetooth writes coalesce on top of this
+}
+
+function stopSound(){
+  clearInterval(snd.timer); snd.timer = null;
+  if (snd.stream) snd.stream.getTracks().forEach(t => t.stop());
+  if (snd.ctx) snd.ctx.close?.();
+  Object.assign(snd, {src:null, stream:null, ctx:null, an:null, level:0, flash:0});
+  $('#sndStop').hidden = true; $('#lvl').style.width = '0';
+  $('#micBtn').classList.remove('live'); $('#micBtn').textContent = '🎤 Listen with mic';
+  $('#bpmGo').classList.remove('live'); $('#bpmGo').textContent = 'Start';
+}
+
+const bandAvg = (d, from, to) => { let s=0; for(let i=from;i<to;i++) s+=d[i]; return s/Math.max(1,to-from)/255; };
+
+function tick(){
+  const now = performance.now();
+  const gain = (+$('#sens').value) / 50;   // 0.1 – 2.0
+  let beat = false;
+
+  if (snd.src === 'mic'){
+    snd.an.getByteFrequencyData(snd.data);
+    const hz = snd.ctx.sampleRate / snd.an.fftSize;            // Hz per bin
+    const b = i => Math.max(1, Math.round(i/hz));
+    const bass = bandAvg(snd.data, 1, b(160)), mid = bandAvg(snd.data, b(160), b(2000)), treb = bandAvg(snd.data, b(2000), b(8000));
+    const k = x => Math.min(1, x*gain*1.6);
+    snd.bass = Math.max(k(bass), snd.bass*0.8); snd.mid = Math.max(k(mid), snd.mid*0.8); snd.treb = Math.max(k(treb), snd.treb*0.8);
+    snd.level = Math.max(Math.min(1, (bass*0.6+mid*0.4)*gain*1.6), snd.level*0.82);
+    // beat = bass jumps well above its recent average
+    snd.avg = snd.avg*0.93 + bass*0.07;
+    if (bass > snd.avg*1.35 && bass*gain > 0.12 && now - snd.lastBeat > 220){ beat = true; snd.lastBeat = now; }
+  } else if (snd.src === 'bpm'){
+    const iv = 60000 / snd.bpm;
+    if (now >= snd.nextBeat){ beat = true; snd.nextBeat += iv; if (now - snd.nextBeat > iv) snd.nextBeat = now + iv; }
+    snd.level = Math.max(beat ? 1 : 0, snd.level * Math.pow(0.15, 50/iv)); // decays across one beat
+    snd.bass = snd.mid = snd.treb = snd.level;
+  } else return;
+
+  if (beat){ snd.flash = 1; snd.beatHue = (snd.beatHue + 67 + Math.random()*60) % 360; }
+  else snd.flash *= 0.75;
+  $('#lvl').style.width = Math.round(snd.level*100) + '%';
+
+  // decide output color for this frame
+  let h, s, v, rgb;
+  const floor = 0.04;                          // keep lights faintly on between hits
+  if (snd.mode === 'pulse'){
+    h = +$('#mHue').value; s = 100; v = Math.max(floor, snd.level);
+  } else if (snd.mode === 'beats'){
+    h = snd.beatHue; s = 100; v = Math.max(floor, Math.max(snd.flash, snd.level*0.7));
+  } else {
+    rgb = [snd.bass, snd.mid, snd.treb].map(x => Math.round(Math.max(floor, x)*255));
+    if (snd.src === 'bpm') rgb = hsvToRgb(snd.beatHue, 100, Math.max(floor, snd.level)*100);
+    [h, s, v] = rgbToHsv(...rgb); v /= 100;
+  }
+  if (!rgb) rgb = hsvToRgb(h, s, v*100);
+  for (const l of targets()){
+    const bytes = l.type==='elk' ? ELK.color(...rgb) : FAIRY.hsv(h, s, Math.max(1, v*100));
+    l.sendLatest('sound', bytes);
+  }
+}
+
+$('#micBtn').onclick = () => snd.src==='mic' ? stopSound() : startMic();
+$('#sndStop').onclick = stopSound;
+$('#bpmGo').onclick = () => snd.src==='bpm' ? stopSound() : startBpm();
+const setBpm = v => { snd.bpm = clamp(v, 40, 220); $('#bpmV').textContent = snd.bpm; };
+$('#bpmUp').onclick = () => setBpm(snd.bpm+1);
+$('#bpmDown').onclick = () => setBpm(snd.bpm-1);
+$('#tapBtn').onclick = () => {
+  const t = performance.now();
+  if (snd.taps.length && t - snd.taps[snd.taps.length-1] > 2500) snd.taps = [];
+  snd.taps.push(t); snd.taps = snd.taps.slice(-8);
+  if (snd.taps.length >= 2){
+    const gaps = snd.taps.slice(1).map((x,i) => x - snd.taps[i]);
+    setBpm(60000 / (gaps.reduce((a,b)=>a+b,0)/gaps.length));
+    if (snd.src==='bpm') snd.nextBeat = t + 60000/snd.bpm;   // re-sync phase to your tap
+  }
+};
 
 /* ---- startup ---- */
 (async function init(){
