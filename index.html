@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b0b10">
+<title>One Remote</title>
+<style>
+  :root{
+    --bg:#0b0b10; --card:#15151d; --card2:#1d1d28; --line:#2a2a38;
+    --text:#f2f2f7; --dim:#9a9ab0; --accent:#ffb000; --good:#3ddc84; --bad:#ff5a5f;
+    --r:18px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+  body{padding:calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 40px)}
+  header{display:flex;align-items:center;justify-content:space-between;margin:2px 4px 14px}
+  h1{font-size:26px;margin:0;letter-spacing:-.5px}
+  h1 span{color:var(--accent)}
+  h2{font-size:15px;margin:0;text-transform:uppercase;letter-spacing:1px;color:var(--dim);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:10px}
+  .row.space{justify-content:space-between}
+  .stack>*+*{margin-top:12px}
+  button{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);
+    border-radius:12px;padding:11px 14px;min-height:44px;cursor:pointer}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
+  button.ghost{background:transparent}
+  button.sm{min-height:36px;padding:6px 10px;font-size:14px}
+  .pw{min-width:72px;font-weight:700}
+  .pw.on{background:var(--good);color:#06210f;border-color:var(--good)}
+  .grow{flex:1}
+  .swatches{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+  .sw{aspect-ratio:1;border-radius:12px;border:2px solid rgba(255,255,255,.12);min-height:0;padding:0}
+  .sw.pick{position:relative;overflow:hidden;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)}
+  .sw.pick input{position:absolute;inset:0;opacity:0;width:100%;height:100%;border:0;padding:0}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:34px;background:transparent}
+  input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:6px;background:var(--line)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;margin-top:-9px;border-radius:50%;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.5)}
+  input.hue::-webkit-slider-runnable-track{background:linear-gradient(90deg,red,yellow,lime,cyan,blue,magenta,red)}
+  label.lbl{font-size:13px;color:var(--dim);display:flex;justify-content:space-between}
+  select,input[type=text]{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:44px;width:100%}
+  .light-head{display:flex;align-items:center;gap:10px}
+  .dot{width:14px;height:14px;border-radius:50%;flex:none;box-shadow:0 0 12px currentColor}
+  .name{font-weight:700;font-size:17px;background:none;border:0;padding:0;min-height:0;width:100%;color:var(--text)}
+  .meta{font-size:12px;color:var(--dim)}
+  .badge{font-size:11px;padding:2px 7px;border-radius:20px;background:var(--card2);border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .badge.off{color:var(--bad);border-color:var(--bad)}
+  details summary{color:var(--dim);font-size:14px;cursor:pointer;padding:6px 0}
+  .empty{text-align:center;color:var(--dim);padding:26px 10px}
+  .warn{background:#2a1d00;border-color:#5a3d00;color:#ffd27a;font-size:14px}
+  #log{font:12px/1.35 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap;max-height:220px;overflow:auto;margin:8px 0 0}
+  .chk{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--dim)}
+  .chk input{width:20px;height:20px;accent-color:var(--accent)}
+  .stepper{display:flex;gap:8px;align-items:center}
+  .stepper output{min-width:70px;text-align:center;font-weight:700}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>One <span>Remote</span></h1>
+  <button class="primary" id="addBtn">+ Add light</button>
+</header>
+
+<div id="nobt" class="card warn" hidden>
+  This browser can't talk to Bluetooth. On iPhone, open this page in the free <b>Bluefy</b> browser.
+  On Android/Mac/PC, use Chrome or Edge. The page must be served over HTTPS.
+</div>
+
+<!-- MASTER -->
+<section class="card stack" id="master">
+  <div class="row space">
+    <h2>All lights <span id="count" class="badge">0 connected</span></h2>
+    <div class="row">
+      <button class="sm" data-all-power="1">On</button>
+      <button class="sm" data-all-power="0">Off</button>
+    </div>
+  </div>
+  <div class="swatches" id="masterSw"></div>
+  <div>
+    <label class="lbl"><span>Hue</span></label>
+    <input type="range" class="hue" min="0" max="359" value="30" id="mHue">
+  </div>
+  <div>
+    <label class="lbl"><span>Brightness</span><span id="mBriV">100%</span></label>
+    <input type="range" min="1" max="100" value="100" id="mBri">
+  </div>
+  <p class="meta" style="margin:0">Master controls apply to every connected light with "In All" checked.</p>
+</section>
+
+<div id="lights"></div>
+<div id="emptyMsg" class="card empty">
+  No lights yet. Close the Lotus Lantern / Hello Fairy apps first (each light only accepts one connection), then tap <b>+ Add light</b>.
+  <div style="margin-top:12px"><button class="sm ghost" id="addAllBtn">My light isn't listed → show all Bluetooth devices</button></div>
+</div>
+
+<div id="remembered" class="card stack" hidden>
+  <h2>Previously paired</h2>
+  <div id="rememberedList" class="stack"></div>
+</div>
+
+<details class="card">
+  <summary>Bluetooth log</summary>
+  <pre id="log"></pre>
+</details>
+
+<script id="protocol">
+/* ===== Protocol layer (pure functions, no browser APIs) ===== */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+
+// --- Lotus Lantern X / duoCo / "ELK-BLEDOM" family ---
+// Service 0xFFF0 (write char 0xFFF3), some units use 0xFFE0 / 0xFFE1.
+// Frame: 7E xx CMD a b c d e EF  (9 bytes)
+const ELK = {
+  power: on => on ? [0x7e,0x00,0x04,0xf0,0x00,0x01,0xff,0x00,0xef]
+                  : [0x7e,0x00,0x04,0x00,0x00,0x00,0xff,0x00,0xef],
+  color: (r,g,b) => [0x7e,0x00,0x05,0x03,clamp(r,0,255),clamp(g,0,255),clamp(b,0,255),0x00,0xef],
+  brightness: pct => [0x7e,0x00,0x01,clamp(pct,0,100),0x00,0x00,0x00,0x00,0xef],
+  effect: code => [0x7e,0x00,0x03,code & 0xff,0x03,0x00,0x00,0x00,0xef],
+  speed: pct => [0x7e,0x00,0x02,clamp(pct,0,100),0x00,0x00,0x00,0x00,0xef],
+};
+const ELK_EFFECTS = [
+  [0x87,'Jump: red/green/blue'],[0x88,'Jump: 7 colors'],
+  [0x89,'Fade: red/green/blue'],[0x8a,'Fade: 7 colors'],
+  [0x8b,'Fade: red'],[0x8c,'Fade: green'],[0x8d,'Fade: blue'],[0x8e,'Fade: yellow'],
+  [0x8f,'Fade: cyan'],[0x90,'Fade: magenta'],[0x91,'Fade: white'],
+  [0x92,'Fade: red↔green'],[0x93,'Fade: red↔blue'],[0x94,'Fade: green↔blue'],
+  [0x95,'Strobe: 7 colors'],[0x96,'Strobe: red'],[0x97,'Strobe: green'],[0x98,'Strobe: blue'],
+  [0x99,'Strobe: yellow'],[0x9a,'Strobe: cyan'],[0x9b,'Strobe: magenta'],[0x9c,'Strobe: white'],
+];
+
+// --- Hello Fairy (Hysiry) family ---
+// Service 49535343-fe7d-..., write 49535343-8841-..., notify 49535343-1e4d-...
+// Frame: AA CMD LEN data... SUM   (SUM = sum of all previous bytes mod 256)
+const withSum = arr => [...arr, arr.reduce((a,b)=>a+b,0) & 0xff];
+const FAIRY = {
+  hello: () => [0xaa,0x00,0x00,0xaa],
+  power: on => withSum([0xaa,0x02,0x01,on?1:0]),
+  // h 0-359, s 0-100, v 0-100  -> wire values s*10, v*10 (0-1000)
+  hsv: (h,s,v) => {
+    h = clamp(h,0,359); const S = clamp(s,0,100)*10, V = clamp(v,1,100)*10;
+    return withSum([0xaa,0x03,0x07,0x01,h>>8,h&255,S>>8,S&255,V>>8,V&255]);
+  },
+  scene: (n,v) => {
+    const V = clamp(v,1,100)*10;
+    return withSum([0xaa,0x03,0x04,0x02,clamp(n,1,255),V>>8,V&255]);
+  },
+};
+const FAIRY_SCENES = 58;
+
+// --- color helpers ---
+function hexToRgb(hex){ const n=parseInt(hex.replace('#',''),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function rgbToHsv(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b), d=max-min;
+  let h=0;
+  if(d){ if(max===r) h=((g-b)/d)%6; else if(max===g) h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; if(h<0) h+=360; }
+  return [Math.round(h)%360, Math.round(max?d/max*100:0), Math.round(max*100)];
+}
+function hsvToRgb(h,s,v){
+  s/=100; v/=100; const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+  let [r,g,b] = h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];
+  return [Math.round((r+m)*255),Math.round((g+m)*255),Math.round((b+m)*255)];
+}
+const toHex = a => a.map(b=>b.toString(16).padStart(2,'0')).join(' ');
+
+if (typeof module !== 'undefined') module.exports = {ELK, FAIRY, rgbToHsv, hsvToRgb, hexToRgb, toHex, withSum};
+</script>
+
+<script>
+/* ===== Bluetooth + UI ===== */
+const FAIRY_SVC   = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+const FAIRY_WRITE = '49535343-8841-43f4-a8d4-ecbe34729bb3';
+const FAIRY_NOTIFY= '49535343-1e4d-4bd9-ba61-23c647249616';
+const ELK_PAIRS   = [[0xfff0,0xfff3],[0xffe0,0xffe1]];
+const OPTIONAL_SERVICES = [FAIRY_SVC, 0xfff0, 0xffe0];
+const NAME_PREFIXES = ['ELK','MELK','LEDBLE','Hello Fairy','Hello','duoCo','XROCKER'];
+
+const SWATCHES = ['#ff0000','#ff5a00','#ffb000','#ffee00','#00ff3c','#00ffd0',
+                  '#0050ff','#7a00ff','#ff00b4','#ffffff','#ffb46b'];
+
+const $ = (s, el=document) => el.querySelector(s);
+const logEl = $('#log');
+function log(msg){ const t=new Date().toLocaleTimeString(); logEl.textContent = `${t}  ${msg}\n` + logEl.textContent.slice(0,6000); }
+
+const store = {
+  get(){ try { return JSON.parse(localStorage.getItem('oneRemote')||'{}'); } catch { return {}; } },
+  set(v){ try { localStorage.setItem('oneRemote', JSON.stringify(v)); } catch {} },
+  patch(id, obj){ const all=this.get(); all[id]={...(all[id]||{}),...obj}; this.set(all); },
+};
+
+const lights = new Map();
+
+class Light {
+  constructor(device){
+    this.device = device; this.id = device.id;
+    const saved = store.get()[this.id] || {};
+    this.name = saved.name || device.name || 'Light';
+    this.inAll = saved.inAll !== false;
+    this.type = null; this.char = null; this.connected = false;
+    this.queue = Promise.resolve(); this.latest = {}; this.pumping = {};
+    this.s = {on:true, h:30, sat:100, v:100, mode:'color', effect:0x87, speed:50, scene:1};
+    device.addEventListener('gattserverdisconnected', () => this.onDisconnect());
+  }
+
+  async connect(){
+    this.setStatus('connecting…');
+    const server = await this.device.gatt.connect();
+    // Detect protocol by which service the light exposes
+    try {
+      const svc = await server.getPrimaryService(FAIRY_SVC);
+      this.char = await svc.getCharacteristic(FAIRY_WRITE);
+      this.type = 'fairy';
+      try { const n = await svc.getCharacteristic(FAIRY_NOTIFY);
+            await n.startNotifications();
+            n.addEventListener('characteristicvaluechanged', e => log(`${this.name} ← ${toHex([...new Uint8Array(e.target.value.buffer)])}`)); } catch {}
+    } catch {
+      for (const [s,c] of ELK_PAIRS){
+        try { const svc = await server.getPrimaryService(s); this.char = await svc.getCharacteristic(c); this.type='elk'; break; } catch {}
+      }
+    }
+    if (!this.char) { server.disconnect(); throw new Error(`"${this.device.name||'device'}" doesn't speak a supported protocol`); }
+    this.connected = true;
+    log(`Connected ${this.name} (${this.type === 'elk' ? 'Lotus Lantern / ELK' : 'Hello Fairy'})`);
+    if (this.type==='fairy') this.send(FAIRY.hello());
+    this.setStatus(); updateCount();
+  }
+
+  onDisconnect(){
+    this.connected = false; this.setStatus('disconnected'); updateCount();
+    log(`${this.name} disconnected`);
+    if (!this.manualDisconnect) setTimeout(() => this.reconnect(true), 1500);
+  }
+  async reconnect(auto){
+    try { await this.connect(); this.render(); }
+    catch(e){ if(!auto) alert(e.message); log(`Reconnect failed: ${e.message}`); }
+  }
+
+  async write(bytes){
+    if (!this.connected || !this.char) return;
+    const data = new Uint8Array(bytes);
+    try {
+      if (this.char.writeValueWithoutResponse && this.char.properties?.writeWithoutResponse) await this.char.writeValueWithoutResponse(data);
+      else if (this.char.writeValueWithResponse) await this.char.writeValueWithResponse(data);
+      else await this.char.writeValue(data);
+      log(`${this.name} → ${toHex(bytes)}`);
+    } catch(e){ log(`Write error on ${this.name}: ${e.message}`); }
+  }
+  send(bytes){ this.queue = this.queue.then(() => this.write(bytes)); return this.queue; }
+  // coalesce rapid slider updates: only the newest value per "key" is sent
+  sendLatest(key, bytes){
+    this.latest[key] = bytes;
+    if (this.pumping[key]) return;
+    this.pumping[key] = true;
+    this.queue = this.queue.then(async () => {
+      while (this.latest[key]) { const b = this.latest[key]; this.latest[key] = null; await this.write(b); }
+      this.pumping[key] = false;
+    });
+  }
+
+  /* ---- high-level actions (translate to each protocol) ---- */
+  power(on){ this.s.on = on; this.send(this.type==='elk' ? ELK.power(on) : FAIRY.power(on)); this.paint(); }
+  color(h, sat, live){
+    Object.assign(this.s, {h, sat, mode:'color', on:true});
+    let b;
+    if (this.type==='elk'){ b = ELK.color(...hsvToRgb(h, sat, 100)); }
+    else b = FAIRY.hsv(h, sat, this.s.v);
+    live ? this.sendLatest('color', b) : this.send(b);
+    this.paint();
+  }
+  brightness(v, live){
+    this.s.v = v;
+    let b;
+    if (this.type==='elk') b = ELK.brightness(v);
+    else b = this.s.mode==='scene' ? FAIRY.scene(this.s.scene, v) : FAIRY.hsv(this.s.h, this.s.sat, v);
+    live ? this.sendLatest('bri', b) : this.send(b);
+    this.paint();
+  }
+  effect(code){ this.s.effect = code; this.s.mode='effect'; this.send(ELK.effect(code)); }
+  speed(v, live){ this.s.speed = v; const b = ELK.speed(v); live ? this.sendLatest('speed', b) : this.send(b); }
+  scene(n){ this.s.scene = n; this.s.mode='scene'; this.send(FAIRY.scene(n, this.s.v)); }
+
+  /* ---- UI ---- */
+  setStatus(text){
+    if (!this.el) return;
+    const b = $('.status', this.el);
+    b.textContent = text || (this.type==='elk' ? 'Lotus Lantern' : 'Hello Fairy');
+    b.classList.toggle('off', text==='disconnected');
+    $('.reconnect', this.el).hidden = text!=='disconnected';
+  }
+  paint(){
+    if (!this.el) return;
+    const [r,g,b] = hsvToRgb(this.s.h, this.s.sat, 100);
+    const dot = $('.dot', this.el);
+    dot.style.color = this.s.on ? `rgb(${r},${g},${b})` : '#333';
+    dot.style.background = dot.style.color;
+    const pw = $('.pw', this.el); pw.classList.toggle('on', this.s.on); pw.textContent = this.s.on?'On':'Off';
+    $('.briV', this.el).textContent = this.s.v + '%';
+    const hue = $('.hue', this.el); if (document.activeElement !== hue) hue.value = this.s.h;
+  }
+  render(){
+    if (!this.el){
+      this.el = document.createElement('section');
+      this.el.className = 'card stack';
+      $('#lights').appendChild(this.el);
+    }
+    const elk = this.type==='elk';
+    this.el.innerHTML = `
+      <div class="light-head">
+        <span class="dot"></span>
+        <div class="grow">
+          <input class="name" type="text" value="${this.name.replace(/"/g,'&quot;')}" aria-label="Light name">
+          <div class="row" style="gap:6px;margin-top:2px"><span class="badge status"></span>
+            <label class="chk"><input type="checkbox" class="inAll" ${this.inAll?'checked':''}> In All</label></div>
+        </div>
+        <button class="pw"></button>
+      </div>
+      <button class="reconnect sm" hidden>Reconnect</button>
+      <div class="swatches"></div>
+      <div><label class="lbl"><span>Hue</span></label>
+        <input type="range" class="hue" min="0" max="359" value="${this.s.h}"></div>
+      <div><label class="lbl"><span>Brightness</span><span class="briV"></span></label>
+        <input type="range" class="bri" min="1" max="100" value="${this.s.v}"></div>
+      ${elk ? `
+        <div class="row"><select class="fx grow">
+          <option value="">Effects…</option>
+          ${ELK_EFFECTS.map(([c,n])=>`<option value="${c}">${n}</option>`).join('')}
+        </select></div>
+        <div><label class="lbl"><span>Effect speed</span></label>
+          <input type="range" class="spd" min="0" max="100" value="${this.s.speed}"></div>`
+      : `
+        <div class="row space"><span class="meta">Scene (1–${FAIRY_SCENES})</span>
+          <div class="stepper"><button class="sm prev">◀</button><output class="sceneV">${this.s.scene}</output><button class="sm next">▶</button><button class="sm play">Play</button></div>
+        </div>`}
+      <details><summary>Advanced</summary>
+        <div class="row" style="margin-top:6px">
+          <input type="text" class="raw grow" placeholder="raw hex, e.g. 7e 00 04 f0 00 01 ff 00 ef">
+          <button class="sm sendRaw">Send</button>
+        </div>
+        <div class="row" style="margin-top:8px"><button class="sm forget">Disconnect &amp; remove</button></div>
+      </details>`;
+    const q = s => $(s, this.el);
+    buildSwatches(q('.swatches'), (h,sat) => this.color(h,sat), h => this.color(h,100,true));
+    q('.pw').onclick = () => this.power(!this.s.on);
+    q('.reconnect').onclick = () => this.reconnect(false);
+    q('.hue').oninput = e => this.color(+e.target.value, 100, true);
+    q('.bri').oninput = e => this.brightness(+e.target.value, true);
+    q('.name').onchange = e => { this.name = e.target.value || this.name; store.patch(this.id,{name:this.name}); };
+    q('.inAll').onchange = e => { this.inAll = e.target.checked; store.patch(this.id,{inAll:this.inAll}); };
+    if (elk){
+      q('.fx').onchange = e => { if(e.target.value) this.effect(+e.target.value); };
+      q('.spd').oninput = e => this.speed(+e.target.value, true);
+    } else {
+      const show = () => q('.sceneV').textContent = this.s.scene;
+      q('.prev').onclick = () => { this.scene(this.s.scene<=1?FAIRY_SCENES:this.s.scene-1); show(); };
+      q('.next').onclick = () => { this.scene(this.s.scene>=FAIRY_SCENES?1:this.s.scene+1); show(); };
+      q('.play').onclick = () => this.scene(this.s.scene);
+    }
+    q('.sendRaw').onclick = () => {
+      const bytes = q('.raw').value.replace(/0x/gi,'').replace(/[^0-9a-f]/gi,'').match(/.{2}/g);
+      if (bytes) this.send(bytes.map(x=>parseInt(x,16)));
+    };
+    q('.forget').onclick = () => {
+      this.manualDisconnect = true;
+      try { this.device.gatt.disconnect(); } catch {}
+      lights.delete(this.id); this.el.remove(); updateCount();
+    };
+    this.setStatus(this.connected ? null : 'disconnected');
+    this.paint();
+  }
+}
+
+function buildSwatches(container, onPick, onCustom){
+  container.innerHTML = '';
+  for (const hex of SWATCHES){
+    const b = document.createElement('button'); b.className='sw'; b.style.background=hex; b.ariaLabel=hex;
+    b.onclick = () => { const [h,s] = rgbToHsv(...hexToRgb(hex)); onPick(h,s); };
+    container.appendChild(b);
+  }
+  const p = document.createElement('label'); p.className='sw pick'; p.ariaLabel='Custom color';
+  p.innerHTML = '<input type="color" value="#ff8800">';
+  p.firstChild.oninput = e => { const [h,s] = rgbToHsv(...hexToRgb(e.target.value)); onPick(h,s); };
+  container.appendChild(p);
+}
+
+function targets(){ return [...lights.values()].filter(l => l.connected && l.inAll); }
+function updateCount(){
+  const n = [...lights.values()].filter(l=>l.connected).length;
+  $('#count').textContent = `${n} connected`;
+  $('#emptyMsg').hidden = lights.size > 0;
+}
+
+async function addLight(acceptAll){
+  try {
+    const opts = acceptAll
+      ? { acceptAllDevices:true, optionalServices:OPTIONAL_SERVICES }
+      : { filters:[...NAME_PREFIXES.map(p=>({namePrefix:p})), {services:[FAIRY_SVC]}, {services:[0xfff0]}],
+          optionalServices:OPTIONAL_SERVICES };
+    const device = await navigator.bluetooth.requestDevice(opts);
+    await attach(device);
+  } catch(e){
+    if (e.name !== 'NotFoundError') { log(e.message); alert(e.message); }
+  }
+}
+async function attach(device){
+  if (lights.has(device.id) && lights.get(device.id).connected) return;
+  const l = lights.get(device.id) || new Light(device);
+  lights.set(device.id, l);
+  await l.connect();
+  l.render();
+  updateCount();
+}
+
+/* ---- master panel ---- */
+document.querySelectorAll('[data-all-power]').forEach(b =>
+  b.onclick = () => targets().forEach(l => l.power(b.dataset.allPower==='1')));
+buildSwatches($('#masterSw'),
+  (h,s) => targets().forEach(l => l.color(h,s)));
+$('#mHue').oninput = e => targets().forEach(l => l.color(+e.target.value, 100, true));
+$('#mBri').oninput = e => {
+  $('#mBriV').textContent = e.target.value + '%';
+  targets().forEach(l => { l.brightness(+e.target.value, true); const s=$('.bri',l.el); if(s) s.value=e.target.value; });
+};
+
+$('#addBtn').onclick = () => addLight(false);
+$('#addAllBtn').onclick = () => addLight(true);
+
+/* ---- startup ---- */
+(async function init(){
+  if (!navigator.bluetooth){ $('#nobt').hidden = false; $('#addBtn').disabled = true; return; }
+  // Chrome can hand back previously-approved devices; Bluefy may not support this.
+  if (navigator.bluetooth.getDevices){
+    try {
+      const devs = await navigator.bluetooth.getDevices();
+      if (devs.length){
+        $('#remembered').hidden = false;
+        for (const d of devs){
+          const saved = store.get()[d.id] || {};
+          const b = document.createElement('button');
+          b.textContent = `Reconnect ${saved.name || d.name || 'light'}`;
+          b.onclick = async () => { try { await attach(d); b.remove(); } catch(e){ alert(e.message); } };
+          $('#rememberedList').appendChild(b);
+        }
+      }
+    } catch {}
+  }
+  updateCount();
+})();
+</script>
+</body>
+</html>
