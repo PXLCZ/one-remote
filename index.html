@@ -67,6 +67,8 @@
   <button class="primary" id="addBtn">+ Add light</button>
 </header>
 
+<div id="errbox" class="card warn" hidden></div>
+
 <div id="nobt" class="card warn" hidden>
   This browser can't talk to Bluetooth. On iPhone, open this page in the free <b>Bluefy</b> browser.
   On Android/Mac/PC, use Chrome or Edge. The page must be served over HTTPS.
@@ -177,8 +179,23 @@ if (typeof module !== 'undefined') module.exports = {ELK, FAIRY, rgbToHsv, hsvTo
 const FAIRY_SVC   = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
 const FAIRY_WRITE = '49535343-8841-43f4-a8d4-ecbe34729bb3';
 const FAIRY_NOTIFY= '49535343-1e4d-4bd9-ba61-23c647249616';
-const ELK_PAIRS   = [[0xfff0,0xfff3],[0xffe0,0xffe1]];
-const OPTIONAL_SERVICES = [FAIRY_SVC, 0xfff0, 0xffe0];
+// Full 128-bit UUID strings: some iOS Bluetooth browsers (Bluefy) reject short numeric IDs
+const u16 = n => `0000${n.toString(16).padStart(4,'0')}-0000-1000-8000-00805f9b34fb`;
+const ELK_PAIRS   = [[u16(0xfff0),u16(0xfff3)],[u16(0xffe0),u16(0xffe1)]];
+const OPTIONAL_SERVICES = [FAIRY_SVC, u16(0xfff0), u16(0xffe0)];
+// Turn any thrown value (Error, string, plain object, undefined) into readable text
+function errText(e){
+  if (e == null) return 'Unknown error (browser gave no details)';
+  if (typeof e === 'string') return e;
+  const parts = [e.name, e.message].filter(Boolean);
+  if (parts.length) return parts.join(': ');
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+const isCancel = e => e && (e.name === 'NotFoundError' || /cancel/i.test(e.message || (typeof e==='string'?e:'')));
+function showError(msg){
+  const box = $('#errbox'); box.textContent = msg; box.hidden = false;
+  clearTimeout(showError.t); showError.t = setTimeout(()=>box.hidden=true, 12000);
+}
 const NAME_PREFIXES = ['ELK','MELK','LEDBLE','Hello Fairy','Hello','duoCo','XROCKER'];
 
 const SWATCHES = ['#ff0000','#ff5a00','#ffb000','#ffee00','#00ff3c','#00ffd0',
@@ -238,7 +255,7 @@ class Light {
   }
   async reconnect(auto){
     try { await this.connect(); this.render(); }
-    catch(e){ if(!auto) alert(e.message); log(`Reconnect failed: ${e.message}`); }
+    catch(e){ if(!auto) showError(`Reconnect failed: ${errText(e)}`); log(`Reconnect failed: ${errText(e)}`); }
   }
 
   async write(bytes){
@@ -249,7 +266,7 @@ class Light {
       else if (this.char.writeValueWithResponse) await this.char.writeValueWithResponse(data);
       else await this.char.writeValue(data);
       log(`${this.name} → ${toHex(bytes)}`);
-    } catch(e){ log(`Write error on ${this.name}: ${e.message}`); }
+    } catch(e){ log(`Write error on ${this.name}: ${errText(e)}`); }
   }
   send(bytes){ this.queue = this.queue.then(() => this.write(bytes)); return this.queue; }
   // coalesce rapid slider updates: only the newest value per "key" is sent
@@ -396,16 +413,24 @@ function updateCount(){
 }
 
 async function addLight(acceptAll){
-  try {
-    const opts = acceptAll
-      ? { acceptAllDevices:true, optionalServices:OPTIONAL_SERVICES }
-      : { filters:[...NAME_PREFIXES.map(p=>({namePrefix:p})), {services:[FAIRY_SVC]}, {services:[0xfff0]}],
-          optionalServices:OPTIONAL_SERVICES };
-    const device = await navigator.bluetooth.requestDevice(opts);
-    await attach(device);
-  } catch(e){
-    if (e.name !== 'NotFoundError') { log(e.message); alert(e.message); }
+  // Try progressively simpler scan options, since iOS Bluetooth browsers support different subsets
+  const attempts = acceptAll ? [
+      ['all devices', { acceptAllDevices:true, optionalServices:OPTIONAL_SERVICES }],
+    ] : [
+      ['name filters', { filters: NAME_PREFIXES.map(p=>({namePrefix:p})), optionalServices:OPTIONAL_SERVICES }],
+      ['all devices',  { acceptAllDevices:true, optionalServices:OPTIONAL_SERVICES }],
+    ];
+  let device = null, lastErr = null;
+  for (const [label, opts] of attempts){
+    try { log(`Scanning (${label})…`); device = await navigator.bluetooth.requestDevice(opts); break; }
+    catch(e){
+      if (isCancel(e)) { log('Scan cancelled / no device chosen'); return; }
+      lastErr = e; log(`Scan (${label}) failed: ${errText(e)}`);
+    }
   }
+  if (!device){ showError(`Couldn't open the light picker: ${errText(lastErr)}`); return; }
+  try { await attach(device); }
+  catch(e){ log(`Connect failed: ${errText(e)}`); showError(`Couldn't connect to ${device.name||'light'}: ${errText(e)}`); }
 }
 async function attach(device){
   if (lights.has(device.id) && lights.get(device.id).connected) return;
@@ -443,7 +468,7 @@ $('#addAllBtn').onclick = () => addLight(true);
           const saved = store.get()[d.id] || {};
           const b = document.createElement('button');
           b.textContent = `Reconnect ${saved.name || d.name || 'light'}`;
-          b.onclick = async () => { try { await attach(d); b.remove(); } catch(e){ alert(e.message); } };
+          b.onclick = async () => { try { await attach(d); b.remove(); } catch(e){ showError(errText(e)); } };
           $('#rememberedList').appendChild(b);
         }
       }
