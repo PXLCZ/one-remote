@@ -139,7 +139,7 @@
 
 <div id="lights"></div>
 <div id="emptyMsg" class="card empty">
-  No lights yet. Close the Lotus Lantern / Hello Fairy apps first (each light only accepts one connection), then tap <b>+ Add light</b>.
+  No lights yet. Close the Lotus Lantern, Hello Fairy and Govee Home apps first (each light only accepts one connection), then tap <b>+ Add light</b>.
   <div style="margin-top:12px"><button class="sm ghost" id="addAllBtn">My light isn't listed → show all Bluetooth devices</button></div>
 </div>
 
@@ -197,6 +197,29 @@ const FAIRY = {
 };
 const FAIRY_SCENES = 58;
 
+// --- Govee family ---
+// Service 00010203-0405-0607-0809-0a0b0c0d1910, write char ...2b11.
+// Every packet is 20 bytes: 33 CMD data... padded with 00, last byte = XOR of the first 19.
+// Lights drop the connection unless they get a keep-alive (AA 01) every ~2 s.
+const govPkt = arr => { const p = new Array(20).fill(0); arr.forEach((b,i) => p[i] = b & 255);
+  p[19] = p.slice(0,19).reduce((a,b) => a ^ b, 0); return p; };
+// Color command "styles" differ by model:
+//   classic   33 05 02 R G B           most older strips/bulbs (H6127, H6159, H6113…)
+//   bulb      33 05 0D R G B           some bulbs and newer strips
+//   segmented 33 05 15 01 R G B … FF 7F  segmented strips (H6199, H617A…); brightness 0-100
+const GOVEE = {
+  keepAlive: () => govPkt([0xaa,0x01]),
+  power: on => govPkt([0x33,0x01,on?1:0]),
+  brightness: (pct, style) => govPkt([0x33,0x04,
+    style==='segmented' ? clamp(pct,0,100) : Math.round(clamp(pct,0,100)*254/100)]),
+  color: (r,g,b,style) => style==='segmented'
+    ? govPkt([0x33,0x05,0x15,0x01,clamp(r,0,255),clamp(g,0,255),clamp(b,0,255),0,0,0,0,0,0xff,0x7f])
+    : govPkt([0x33,0x05,style==='bulb'?0x0d:0x02,clamp(r,0,255),clamp(g,0,255),clamp(b,0,255)]),
+};
+const GOVEE_SEGMENTED = ['H6053','H6072','H6102','H6199','H617A','H617C'];
+const goveeModel = name => ((name||'').match(/H[0-9][0-9A-Z]{3}/i) || [''])[0].toUpperCase();
+const goveeAutoStyle = name => GOVEE_SEGMENTED.includes(goveeModel(name)) ? 'segmented' : 'classic';
+
 // --- color helpers ---
 function hexToRgb(hex){ const n=parseInt(hex.replace('#',''),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
 function rgbToHsv(r,g,b){
@@ -213,7 +236,7 @@ function hsvToRgb(h,s,v){
 }
 const toHex = a => a.map(b=>b.toString(16).padStart(2,'0')).join(' ');
 
-if (typeof module !== 'undefined') module.exports = {ELK, FAIRY, rgbToHsv, hsvToRgb, hexToRgb, toHex, withSum};
+if (typeof module !== 'undefined') module.exports = {ELK, FAIRY, GOVEE, goveeAutoStyle, rgbToHsv, hsvToRgb, hexToRgb, toHex, withSum};
 </script>
 
 <script>
@@ -224,7 +247,9 @@ const FAIRY_NOTIFY= '49535343-1e4d-4bd9-ba61-23c647249616';
 // Full 128-bit UUID strings: some iOS Bluetooth browsers (Bluefy) reject short numeric IDs
 const u16 = n => `0000${n.toString(16).padStart(4,'0')}-0000-1000-8000-00805f9b34fb`;
 const ELK_PAIRS   = [[u16(0xfff0),u16(0xfff3)],[u16(0xffe0),u16(0xffe1)]];
-const OPTIONAL_SERVICES = [FAIRY_SVC, u16(0xfff0), u16(0xffe0)];
+const GOVEE_SVC   = '00010203-0405-0607-0809-0a0b0c0d1910';
+const GOVEE_WRITE = '00010203-0405-0607-0809-0a0b0c0d2b11';
+const OPTIONAL_SERVICES = [FAIRY_SVC, GOVEE_SVC, u16(0xfff0), u16(0xffe0)];
 // Turn any thrown value (Error, string, plain object, undefined) into readable text
 function errText(e){
   if (e == null) return 'Unknown error (browser gave no details)';
@@ -238,7 +263,7 @@ function showError(msg){
   const box = $('#errbox'); box.textContent = msg; box.hidden = false;
   clearTimeout(showError.t); showError.t = setTimeout(()=>box.hidden=true, 12000);
 }
-const NAME_PREFIXES = ['ELK','MELK','LEDBLE','Hello Fairy','Hello','duoCo','XROCKER'];
+const NAME_PREFIXES = ['ELK','MELK','LEDBLE','Hello Fairy','Hello','duoCo','XROCKER','Govee','ihoment','GBK','Minger'];
 
 const SWATCHES = ['#ff0000','#ff5a00','#ffb000','#ffee00','#00ff3c','#00ffd0',
                   '#0050ff','#7a00ff','#ff00b4','#ffffff','#ffb46b'];
@@ -254,6 +279,7 @@ const store = {
 };
 
 const lights = new Map();
+const TYPE_LABEL = { elk:'Lotus Lantern', fairy:'Hello Fairy', govee:'Govee' };
 
 class Light {
   constructor(device){
@@ -279,18 +305,30 @@ class Light {
             await n.startNotifications();
             n.addEventListener('characteristicvaluechanged', e => log(`${this.name} ← ${toHex([...new Uint8Array(e.target.value.buffer)])}`)); } catch {}
     } catch {
-      for (const [s,c] of ELK_PAIRS){
-        try { const svc = await server.getPrimaryService(s); this.char = await svc.getCharacteristic(c); this.type='elk'; break; } catch {}
+      try {
+        const svc = await server.getPrimaryService(GOVEE_SVC);
+        this.char = await svc.getCharacteristic(GOVEE_WRITE); this.type = 'govee';
+      } catch {
+        for (const [s,c] of ELK_PAIRS){
+          try { const svc = await server.getPrimaryService(s); this.char = await svc.getCharacteristic(c); this.type='elk'; break; } catch {}
+        }
       }
     }
     if (!this.char) { server.disconnect(); throw new Error(`"${this.device.name||'device'}" doesn't speak a supported protocol`); }
     this.connected = true;
-    log(`Connected ${this.name} (${this.type === 'elk' ? 'Lotus Lantern / ELK' : 'Hello Fairy'})`);
+    log(`Connected ${this.name} (${TYPE_LABEL[this.type]})`);
     if (this.type==='fairy') this.send(FAIRY.hello());
+    if (this.type==='govee'){
+      this.style = (store.get()[this.id]||{}).goveeStyle || 'auto';
+      clearInterval(this.ka);
+      this.ka = setInterval(() => this.send(GOVEE.keepAlive()), 2000);
+    }
     this.setStatus(); updateCount();
   }
 
+  get gStyle(){ return this.style && this.style!=='auto' ? this.style : goveeAutoStyle(this.device.name); }
   onDisconnect(){
+    clearInterval(this.ka);
     this.connected = false; this.setStatus('disconnected'); updateCount();
     log(`${this.name} disconnected`);
     if (!this.manualDisconnect) setTimeout(() => this.reconnect(true), 1500);
@@ -323,11 +361,12 @@ class Light {
   }
 
   /* ---- high-level actions (translate to each protocol) ---- */
-  power(on){ this.s.on = on; this.send(this.type==='elk' ? ELK.power(on) : FAIRY.power(on)); this.paint(); }
+  power(on){ this.s.on = on; this.send(this.type==='elk' ? ELK.power(on) : this.type==='govee' ? GOVEE.power(on) : FAIRY.power(on)); this.paint(); }
   color(h, sat, live){
     Object.assign(this.s, {h, sat, mode:'color', on:true});
     let b;
     if (this.type==='elk'){ b = ELK.color(...hsvToRgb(h, sat, 100)); }
+    else if (this.type==='govee'){ b = GOVEE.color(...hsvToRgb(h, sat, 100), this.gStyle); }
     else b = FAIRY.hsv(h, sat, this.s.v);
     live ? this.sendLatest('color', b) : this.send(b);
     this.paint();
@@ -336,6 +375,7 @@ class Light {
     this.s.v = v;
     let b;
     if (this.type==='elk') b = ELK.brightness(v);
+    else if (this.type==='govee') b = GOVEE.brightness(v, this.gStyle);
     else b = this.s.mode==='scene' ? FAIRY.scene(this.s.scene, v) : FAIRY.hsv(this.s.h, this.s.sat, v);
     live ? this.sendLatest('bri', b) : this.send(b);
     this.paint();
@@ -348,7 +388,7 @@ class Light {
   setStatus(text){
     if (!this.el) return;
     const b = $('.status', this.el);
-    b.textContent = text || (this.type==='elk' ? 'Lotus Lantern' : 'Hello Fairy');
+    b.textContent = text || (this.type==='govee' && goveeModel(this.device.name) ? `Govee ${goveeModel(this.device.name)}` : TYPE_LABEL[this.type]);
     b.classList.toggle('off', text==='disconnected');
     $('.reconnect', this.el).hidden = text!=='disconnected';
   }
@@ -385,7 +425,16 @@ class Light {
         <input type="range" class="hue" min="0" max="359" value="${this.s.h}"></div>
       <div><label class="lbl"><span>Brightness</span><span class="briV"></span></label>
         <input type="range" class="bri" min="1" max="100" value="${this.s.v}"></div>
-      ${elk ? `
+      ${this.type==='govee' ? `
+        <div><label class="lbl"><span>Color command style</span></label>
+          <select class="gstyle">
+            <option value="auto">Auto (${goveeAutoStyle(this.device.name)})</option>
+            <option value="classic">Classic (most older Govee)</option>
+            <option value="bulb">Bulb / alt</option>
+            <option value="segmented">Segmented strip</option>
+          </select>
+          <p class="meta" style="margin:6px 0 0">If On/Off works but colors don't change, try another style.</p></div>`
+      : elk ? `
         <div class="row"><select class="fx grow">
           <option value="">Effects…</option>
           ${ELK_EFFECTS.map(([c,n])=>`<option value="${c}">${n}</option>`).join('')}
@@ -411,7 +460,11 @@ class Light {
     q('.bri').oninput = e => this.brightness(+e.target.value, true);
     q('.name').onchange = e => { this.name = e.target.value || this.name; store.patch(this.id,{name:this.name}); };
     q('.inAll').onchange = e => { this.inAll = e.target.checked; store.patch(this.id,{inAll:this.inAll}); };
-    if (elk){
+    if (this.type==='govee'){
+      q('.gstyle').value = this.style || 'auto';
+      q('.gstyle').onchange = e => { this.style = e.target.value; store.patch(this.id,{goveeStyle:this.style});
+        log(`${this.name}: color style → ${this.gStyle}`); this.color(this.s.h, this.s.sat); };
+    } else if (elk){
       q('.fx').onchange = e => { if(e.target.value) this.effect(+e.target.value); };
       q('.spd').oninput = e => this.speed(+e.target.value, true);
     } else {
@@ -431,7 +484,7 @@ class Light {
       if (bytes) this.send(bytes.map(x=>parseInt(x,16)));
     };
     q('.forget').onclick = () => {
-      this.manualDisconnect = true;
+      this.manualDisconnect = true; clearInterval(this.ka);
       try { this.device.gatt.disconnect(); } catch {}
       lights.delete(this.id); this.el.remove(); updateCount();
     };
@@ -598,7 +651,7 @@ function tick(){
   }
   if (!rgb) rgb = hsvToRgb(h, s, v*100);
   for (const l of targets()){
-    const bytes = l.type==='elk' ? ELK.color(...rgb) : FAIRY.hsv(h, s, Math.max(1, v*100));
+    const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
     l.sendLatest('sound', bytes);
   }
 }
