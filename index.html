@@ -150,6 +150,22 @@
     <p class="meta" id="fxHelp" style="margin:6px 0 0">Pick an effect to run it on every light in "All", in step.</p>
   </div>
   <div>
+    <div class="row space">
+      <span class="meta">Run on the lights, no phone needed</span>
+      <select id="bakeDir" style="width:auto" aria-label="Scroll direction">
+        <option value="4">↓ Down</option><option value="3">↑ Up</option>
+      </select>
+    </div>
+    <div class="seg" id="bakeList" style="margin-top:6px">
+      <button data-bake="candy">Candy cane</button>
+      <button data-bake="holly">Holly</button>
+      <button data-bake="ice">Ice</button>
+      <button data-bake="wave">Wave</button>
+      <button data-bake="comet">Comet</button>
+    </div>
+    <p class="meta" style="margin:6px 0 0">The curtain scrolls the pattern by itself and the ELK strip runs a matching built-in effect, so both keep going after you close this page (not in step). Speed and ↓ / ↑ change it while it plays.</p>
+  </div>
+  <div>
     <label class="lbl"><span>Speed</span><span id="fxSpdV">50%</span></label>
     <input type="range" min="1" max="100" value="50" id="fxSpd">
   </div>
@@ -485,7 +501,9 @@ class Light {
     if (!q('.diy')) return;
     this.brush = this.brush || {h:0};
     const PAL = [{h:0},{h:30},{h:55},{h:120},{h:180},{h:230},{h:270},{h:320},{white:true},{off:true}];
-    const css = c => c.off ? 'repeating-linear-gradient(45deg,#222 0 5px,#444 5px 10px)' : c.white ? '#fff' : `hsl(${c.h},100%,50%)`;
+    // a cell may carry its own brightness v (0-1), e.g. a comet's fading tail from "Run on the lights"
+    const css = c => c.off ? 'repeating-linear-gradient(45deg,#222 0 5px,#444 5px 10px)'
+      : c.white ? `hsl(0,0%,${Math.round(20 + 80*(c.v ?? 1))}%)` : `hsl(${c.h},100%,${Math.round(8 + 42*(c.v ?? 1))}%)`;
     const pal = q('.pal');
     pal.innerHTML = PAL.map((c,i) => `<button data-i="${i}" style="background:${css(c)}" aria-label="${c.off?'Off':c.white?'White':'Hue '+c.h}"></button>`).join('');
     const markSel = () => pal.querySelectorAll('button').forEach((b,i) =>
@@ -499,7 +517,7 @@ class Light {
       grid.innerHTML = cells.map((c,i) => `<button class="cell" data-i="${i}" style="background:${c ? css(c) : '#22222e'}">${i+1}</button>`).join('');
     };
     const save = cells => store.patch(this.id, {diyCells: cells});
-    const wire = c => c.off ? DIY_BLANK : [c.white ? DIY_WHITE : hueByte(c.h), diyVal(this.s.v)];
+    const wire = c => c.off ? DIY_BLANK : [c.white ? DIY_WHITE : hueByte(c.h), diyVal(this.s.v * (c.v ?? 1))];
     const allCells = () => this.diyCells().map((c,i) => [i, ...(c ? wire(c) : DIY_BLANK)]);
     const motion = () => +q('.diyMotion').value, speed = () => +q('.diySpd').value;
     const edit = () => { if (!this.diyEditing){ this.send(FAIRY.diyMap()); this.send(FAIRY.diyState(motion(), speed(), 0)); this.diyEditing = true; } };
@@ -531,6 +549,11 @@ class Light {
       const playing = this.s.mode==='diy' && !this.diyEditing;
       edit(); sendCells(allCells()); if (playing) play();
     };
+    // load a whole pattern (a saved one, or one from "Run on the lights") and play it
+    this.diyLoad = p => {
+      save(p.cells); q('.diyMotion').value = p.motion; q('.diySpd').value = p.speed;
+      q('.diySpdV').textContent = p.speed; draw(); q('.diyPlay').onclick();
+    };
     q('.diyMotion').onchange = () => { if (this.s.mode==='diy' || this.diyEditing) play(); };
     q('.diySpd').oninput = e => q('.diySpdV').textContent = e.target.value;
     q('.diySpd').onchange = () => { if (this.s.mode==='diy' || this.diyEditing) play(); };
@@ -544,8 +567,7 @@ class Light {
       box.querySelectorAll('.fav').forEach(b => b.onclick = e => {
         const d = e.target.dataset.del, list = pats();
         if (d !== undefined){ list.splice(+d,1); store.patch(this.id,{diyPats:list}); drawPats(); return; }
-        const p = list[+b.dataset.i]; save(p.cells); q('.diyMotion').value = p.motion; q('.diySpd').value = p.speed;
-        q('.diySpdV').textContent = p.speed; draw(); q('.diyPlay').onclick();
+        this.diyLoad(list[+b.dataset.i]);
       });
     };
     q('.diySave').onclick = () => {
@@ -798,11 +820,11 @@ async function attach(device){
 
 /* ---- master panel ---- */
 document.querySelectorAll('[data-all-power]').forEach(b =>
-  b.onclick = () => { if (b.dataset.allPower==='0') stopFx(); targets().forEach(l => l.power(b.dataset.allPower==='1')); });
+  b.onclick = () => { if (b.dataset.allPower==='0'){ stopFx(); clearBake(); } targets().forEach(l => l.power(b.dataset.allPower==='1')); });
 buildSwatches($('#masterSw'),
-  (h,s) => { stopFx(); targets().forEach(l => l.color(h,s)); });
+  (h,s) => { stopFx(); clearBake(); targets().forEach(l => l.color(h,s)); });
 // while Breathe runs, the hue slider steers its color instead of stopping it
-$('#mHue').oninput = e => { if (fx.name==='breathe') return; stopFx(); targets().forEach(l => l.color(+e.target.value, 100, true)); };
+$('#mHue').oninput = e => { if (fx.name==='breathe') return; stopFx(); clearBake(); targets().forEach(l => l.color(+e.target.value, 100, true)); };
 $('#mBri').oninput = e => {
   $('#mBriV').textContent = e.target.value + '%';
   if (fx.timer) return;   // a running effect reads this slider on its next frame
@@ -874,7 +896,7 @@ function startBpm(){
 }
 
 function begin(){
-  fx.canvas = new Map(); fx.sent = new Map();
+  fx.canvas = new Map(); fx.sent = new Map(); clearBake();
   $('#sndStop').hidden = false;
   $('#micBtn').classList.toggle('live', snd.src==='mic');
   $('#micBtn').textContent = snd.src==='mic' ? '🎤 Listening…' : '🎤 Listen with mic';
@@ -952,6 +974,7 @@ function tick(){
   if (!rgb) rgb = hsvToRgb(h, s, v*100);
   for (const l of targets()){
     const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
+    if (l.type==='fairy') l.diyEditing = false;   // a color frame takes the curtain out of DIY
     l.sendLatest('sound', bytes);
   }
 }
@@ -1041,6 +1064,7 @@ function sendSolo(l, [h, s, v], dim){
   const rgb = hsvToRgb(h, s, v*100);
   const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
   const key = bytes.join();
+  if (l.type==='fairy') l.diyEditing = false;   // a color frame takes the curtain out of DIY
   if (fx.sent.get(l) !== key){ fx.sent.set(l, key); l.sendLatest('fx', bytes); }
 }
 // average color of the first len pixels, brightened so a glow keeps its punch
@@ -1116,7 +1140,7 @@ function fxTick(){
 }
 
 function startFx(name){
-  stopSound(); lights.forEach(l => l.stopLoop?.(true));
+  stopSound(); clearBake(); lights.forEach(l => l.stopLoop?.(true));
   clearInterval(fx.timer);
   Object.assign(fx, { name, phase:0, last:performance.now(), sent:new Map(), canvas:new Map(), st:{}, flame:new Map() });
   fx.timer = setInterval(fxTick, PX[name] ? 70 : 100); fxTick();
@@ -1134,6 +1158,46 @@ function stopFx(){
 $('#fxCard').addEventListener('click', e => { const b = e.target.closest('[data-fx]'); if (b) b.dataset.fx===fx.name ? stopFx() : startFx(b.dataset.fx); });
 $('#fxStop').onclick = stopFx;
 $('#fxSpd').oninput = e => $('#fxSpdV').textContent = e.target.value + '%';
+
+/* ---- run on the lights: patterns the controllers play by themselves, with this page closed ---- */
+// The curtain gets a DIY pattern with a scroll motion (it animates that on its own), and the ELK strip gets a
+// matching built-in effect. Stripes come in an even count, so the pattern wraps around without a seam.
+const stripe = (i, n) => Math.floor(i * Math.max(2, Math.round(n/6) * 2) / n) % 2 === 1;
+const BAKE = {
+  candy: { name:'Candy cane', elk:0x8b, cell:(i, n) => stripe(i, n) ? {white:true} : {h:0} },     // ELK: fade red
+  holly: { name:'Holly',      elk:0x92, cell:(i, n) => stripe(i, n) ? {h:120} : {h:0} },          // ELK: fade red↔green
+  ice:   { name:'Ice',        elk:0x8f, cell:(i, n) => stripe(i, n) ? {white:true} : {h:200} },   // ELK: fade cyan
+  wave:  { name:'Wave',       elk:0x8a, cell:(i, n) => ({h: Math.round(i / n * 360) % 360}) },    // ELK: fade 7 colors
+  comet: { name:'Comet',      elk:0x8d, cell:(i, n) => { const tail = Math.max(3, Math.round(n/4));   // ELK: fade blue
+    return i === 0 ? {white:true} : i <= tail ? {h:220, v:(1 - i/(tail + 1)) ** 2} : {off:true}; } },
+};
+const bake = { last:null };
+function bakeOnLights(name){
+  const b = BAKE[name];
+  stopFx(); stopSound(); lights.forEach(l => l.stopLoop?.(true));
+  const motion = +$('#bakeDir').value, speed = clamp(+$('#fxSpd').value, 1, 100);
+  let curtains = 0;
+  for (const l of targets().filter(l => l.s.on)){
+    if (l.type==='fairy' && l.diyLoad){
+      const n = l.diyN();
+      l.diyEditing = false;   // always send the order map and edit state first
+      l.diyLoad({ cells: Array.from({length:n}, (_, i) => b.cell(i, n)), motion, speed });
+      curtains++;
+    } else if (l.type==='elk'){ l.effect(b.elk); l.speed(speed); }
+  }
+  bake.last = name;
+  document.querySelectorAll('#bakeList [data-bake]').forEach(x => x.classList.toggle('sel', x.dataset.bake===name));
+  $('#fxHelp').textContent = curtains ? `${b.name} is playing on the lights by itself, so you can close this page.`
+    : 'Connect the Hello Fairy curtain to play a pattern on it.';
+  log(`${b.name} running on the lights (motion ${motion}, speed ${speed})`);
+}
+function clearBake(){
+  bake.last = null;
+  document.querySelectorAll('#bakeList [data-bake]').forEach(x => x.classList.remove('sel'));
+}
+$('#bakeList').onclick = e => { const b = e.target.closest('[data-bake]'); if (b) bakeOnLights(b.dataset.bake); };
+$('#bakeDir').onchange = () => { if (bake.last) bakeOnLights(bake.last); };
+$('#fxSpd').addEventListener('change', () => { if (bake.last && !fx.timer) bakeOnLights(bake.last); });
 
 /* ---- startup ---- */
 (async function init(){
