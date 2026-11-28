@@ -48,18 +48,18 @@ Frame: `AA CMD LEN data… CK`. CK is the sum of the previous bytes mod 256, but
 **DIY, decoded from PacketLogger traces of the official app (2026-11-27 and 2026-11-28):**
 - **Order map:** `AA A6 B2 00 01 … B1 CK`. This identity table of 178 entries is sent before DIY, and the light answers `AA A6 01 B2 03`.
 - **State:** `AA D0 04 MM 64 SS ST BB`
-  - MM is motion: 0 = static. The app's two motion buttons sent 4 and then 3 when tapped in order; 1, 2 and 5–7 are untested.
+  - MM is motion: 0 = static. The app's Mode row has seven buttons: two curved arrows, ↓, ↑, two sparkles and a pin. ↓ sends 4 and ↑ sends 3; the other five aren't mapped yet. In One Remote, 1, 2 and 5–7 are untested.
   - The `64` never changes, not even when the brightness slider moves.
   - SS is speed, 1–100.
   - ST is 00 = editing, 01 = playing. The app also sends 03 as DIY opens, just before 00; meaning unknown.
 - **Paint:** `AA C4 LEN 00 [IDhi IDlo HUE VAL]×n BB`
-  - HUE is hue° / 2 (00 = red, 3C = green), and `FF` is white.
+  - HUE is hue° / 2 (00 = red, 3C = green). `FF` is white and `FE` is blank: the app's editor shows `FE` sections as empty, and they stay dark.
   - VAL is brightness: 0–250, where `FA` is full and `00` is off. The app's DIY brightness slider repaints every section with VAL = ⌊percent × 2.5⌋, about every 50 ms while dragging.
   - At most 24 sections per packet.
   - Two single-section paints started with `01` instead of `00`; meaning unknown.
 - **Opening DIY**, the app sends the order map, state 03, state 00, its saved canvas, then state 01.
-- The curtain reports **26 DIY sections** (indices 0–25).
-- **Still unconfirmed:** what HUE `FE` means (the app filled the whole canvas with it several times; probably blank), the names of the two motion buttons, what `AA D7 02 01 00 DD` does (seen once), and which physical snowflake each section maps to. One Remote sends blank as HUE 0 with VAL `00`.
+- The curtain reports **26 DIY sections** (indices 0–25), and each section is one bulb. The app draws them as one string; section 1 lit the tip of a snowflake arm and section 2 the next bulb in.
+- **Still unconfirmed:** the other five Mode buttons, what `AA D7 02 01 00 DD` does (seen once), where sections 3–26 sit, and whether every snowflake shows the same pattern.
 - The curtain has no text feature (snowflakes, not a matrix).
 
 **What the official app sends on connect:**
@@ -89,8 +89,8 @@ Packets are 20 bytes: `33 CMD data…`, zero-padded, with byte 19 = XOR of bytes
 - **Nanoleaf Essentials:** proprietary BLE/Thread, so not feasible. A possible workaround is buttons that run iOS Shortcuts (`shortcuts://run-shortcut?name=…`) for lights that are in Apple Home.
 
 ## Open to-dos
-1. Name the two DIY motion buttons (they send MM 4 and 3), and work out what HUE `FE` and `AA D7 02 01 00 DD` mean. The 2026-11-28 trace confirmed white, brightness, speed and the motion values.
-2. Map the 26 sections to physical snowflakes (paint section 1, see where it lights).
+1. Map the other five DIY Mode buttons (tap each once in a short trace) and work out `AA D7 02 01 00 DD`. White, blank, brightness, speed and the ↓ / ↑ buttons are confirmed (2026-11-28).
+2. Finish mapping the 26 sections to bulbs: section 1 is the tip of a snowflake arm and section 2 the next bulb in.
 3. Delete the Bluetooth logging profile from the iPhone afterwards (Settings → General → VPN & Device Management).
 
 ## Capturing BLE traffic (how the DIY protocol was found)

@@ -214,7 +214,7 @@ function meaning(v, linkFamily) {
 }
 
 // Frame: AA CMD LEN data… CK (CK = sum of the earlier bytes, or a literal BB). Commands: see NOTES.md.
-const HUE_NAME = { 0xfe: 'FE (blank?)', 0xff: 'white' };
+const HUE_NAME = { 0xfe: 'blank', 0xff: 'white' };
 function fairy(v) {
   const n = v.length, cmd = v[1], d = v.subarray(3, n - 1), ck = v[n - 1], want = sum8(v.subarray(0, n - 1));
   const u16 = i => d[i] << 8 | d[i + 1];

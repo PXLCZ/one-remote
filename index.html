@@ -220,11 +220,11 @@ const FAIRY_SCENES = 58;
 
 // Hello Fairy DIY / per-section painting, decoded from Bluetooth traces of the official app (see NOTES.md).
 //   map    AA A6 B2 00 01 … B1 SUM     sent before DIY (identity order table, 178 entries)
-//   state  AA D0 04 MM 64 SS ST BB     MM motion (0 = static; the app's motion buttons send 3 and 4),
+//   state  AA D0 04 MM 64 SS ST BB     MM motion (0 = static; the app's ↑ button sends 3, ↓ sends 4),
 //                                      SS speed 1-100, ST 00 = edit, 01 = play
-//   paint  AA C4 LEN 00 [IDhi IDlo HUE VAL]×n BB   HUE = hue°/2, FF = white; ≤24 per packet
+//   paint  AA C4 LEN 00 [IDhi IDlo HUE VAL]×n BB   HUE = hue°/2, FF = white, FE = blank; ≤24 per packet
 //          VAL = brightness 0-250 (FA = full); the app's DIY brightness slider repaints every section
-const DIY_WHITE = 0xff;
+const DIY_WHITE = 0xff, DIY_BLANK = [0xfe, 0xfa];
 const diyVal = pct => Math.floor(clamp(pct, 0, 100) * 2.5);
 Object.assign(FAIRY, {
   diyMap: () => withSum([0xaa,0xa6,0xb2, ...Array.from({length:178}, (_,i) => i)]),
@@ -462,8 +462,8 @@ class Light {
       grid.innerHTML = cells.map((c,i) => `<button class="cell" data-i="${i}" style="background:${c ? css(c) : '#22222e'}">${i+1}</button>`).join('');
     };
     const save = cells => store.patch(this.id, {diyCells: cells});
-    const wire = c => c.off ? [0, 0] : [c.white ? DIY_WHITE : hueByte(c.h), diyVal(this.s.v)];
-    const allCells = () => this.diyCells().map((c,i) => [i, ...(c ? wire(c) : [0,0])]);
+    const wire = c => c.off ? DIY_BLANK : [c.white ? DIY_WHITE : hueByte(c.h), diyVal(this.s.v)];
+    const allCells = () => this.diyCells().map((c,i) => [i, ...(c ? wire(c) : DIY_BLANK)]);
     const motion = () => +q('.diyMotion').value, speed = () => +q('.diySpd').value;
     const edit = () => { if (!this.diyEditing){ this.send(FAIRY.diyMap()); this.send(FAIRY.diyState(motion(), speed(), 0)); this.diyEditing = true; } };
     const sendCells = list => FAIRY.diyPaint(list).forEach(b => this.send(b));
@@ -483,7 +483,7 @@ class Light {
     };
     q('.diyClear').onclick = () => {
       const cells = this.diyCells().map(() => null); save(cells); draw();
-      edit(); sendCells(cells.map((_,i) => [i, 0, 0]));
+      edit(); sendCells(cells.map((_,i) => [i, ...DIY_BLANK]));
     };
     q('.diyPlay').onclick = () => {
       // resend the whole pattern so the curtain matches what's on screen, then play it
@@ -629,15 +629,15 @@ class Light {
             <div><label class="lbl"><span>Motion</span></label>
               <select class="diyMotion">
                 <option value="0">Static</option>
-                <option value="3">Motion 3</option>
-                <option value="4">Motion 4</option>
+                <option value="4">↓ Down</option>
+                <option value="3">↑ Up</option>
                 <optgroup label="Untested">${[1,2,5,6,7].map(n=>`<option value="${n}">Motion ${n}</option>`).join('')}</optgroup>
               </select></div>
             <div><label class="lbl"><span>Motion speed</span><span class="diySpdV">100</span></label>
               <input type="range" class="diySpd" min="1" max="100" value="100"></div>
             <div class="row space"><span class="meta">Saved patterns</span><button class="sm diySave">💾 Save</button></div>
             <div class="favs diyPats"></div>
-            <p class="meta" style="margin:0">Tap sections to paint; the curtain previews as you go. The Brightness slider above dims the pattern too. Static, Motion 3 and Motion 4 are what the official app's buttons send; the untested motions may do nothing. Your curtain reports 26 sections; change the count under Advanced if yours differs.</p>
+            <p class="meta" style="margin:0">Tap sections to paint; the curtain previews as you go. Each section is one bulb, and section 1 is the tip of a snowflake arm. The Brightness slider above dims the pattern too. Static and the ↓ / ↑ arrows match the official app's Mode buttons; the untested motions may do nothing. Your curtain reports 26 sections; change the count under Advanced if yours differs.</p>
           </div>
         </details>
         <div class="row space"><span class="meta">Favorites</span>
