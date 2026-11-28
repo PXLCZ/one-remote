@@ -70,6 +70,12 @@
   .fav{min-height:36px;padding:4px 10px;font-size:14px;border-radius:20px;display:inline-flex;align-items:center;gap:6px}
   .fav.cur{border-color:var(--accent);color:var(--accent)}
   .fav .x{opacity:.55;font-size:12px}
+  .diygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:6px}
+  .cell{aspect-ratio:1;min-height:0;padding:0;border-radius:10px;font-size:11px;color:rgba(255,255,255,.75);
+    background:#22222e;border:1px solid var(--line);text-shadow:0 0 3px #000}
+  .pal{display:flex;flex-wrap:wrap;gap:6px}
+  .pal button{width:38px;height:38px;min-height:0;padding:0;border-radius:50%;border:2px solid rgba(255,255,255,.15)}
+  .pal button.sel{outline:3px solid var(--accent);outline-offset:2px}
   .timerV{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700}
 </style>
 </head>
@@ -211,6 +217,26 @@ const FAIRY = {
   },
 };
 const FAIRY_SCENES = 58;
+
+// Hello Fairy DIY / per-section painting, decoded from a Bluetooth trace of the official app.
+//   map    AA A6 B2 00 01 … B1 SUM     sent before DIY (identity order table, 178 entries)
+//   state  AA D0 04 MM 64 SS ST BB     MM motion (0 = static), SS speed 1-100, ST 00 = edit, 01 = play
+//   paint  AA C4 LEN 00 [IDhi IDlo HUE VAL]×n BB   HUE = hue°/2 (FF = white), VAL = FA in the app; ≤24 per packet
+const DIY_WHITE = 0xff;
+Object.assign(FAIRY, {
+  diyMap: () => withSum([0xaa,0xa6,0xb2, ...Array.from({length:178}, (_,i) => i)]),
+  diyState: (motion, speed, state) => [0xaa,0xd0,0x04, motion & 255, 0x64, clamp(speed,1,100), state & 255, 0xbb],
+  diyPaint: cells => {          // cells: [[index, hueByte, val], ...]
+    const out = [];
+    for (let i = 0; i < cells.length; i += 24){
+      const chunk = cells.slice(i, i+24);
+      out.push([0xaa,0xc4, 1 + chunk.length*4, 0x00,
+        ...chunk.flatMap(([idx,hb,val]) => [(idx>>8)&255, idx&255, hb&255, val&255]), 0xbb]);
+    }
+    return out;
+  },
+});
+const hueByte = deg => Math.round(((deg % 360) + 360) % 360 / 2) % 180;
 
 // --- Govee family ---
 // Service 00010203-0405-0607-0809-0a0b0c0d1910, write char ...2b11.
@@ -379,6 +405,7 @@ class Light {
   power(on){ this.s.on = on; this.send(this.type==='elk' ? ELK.power(on) : this.type==='govee' ? GOVEE.power(on) : FAIRY.power(on)); this.paint(); }
   color(h, sat, live){
     if (this.loop) this.stopLoop();
+    this.diyEditing = false;
     Object.assign(this.s, {h, sat, mode:'color', on:true});
     let b;
     if (this.type==='elk'){ b = ELK.color(...hsvToRgb(h, sat, 100)); }
@@ -398,8 +425,87 @@ class Light {
   }
   effect(code){ this.s.effect = code; this.s.mode='effect'; this.send(ELK.effect(code)); }
   speed(v, live){ this.s.speed = v; const b = ELK.speed(v); live ? this.sendLatest('speed', b) : this.send(b); }
-  scene(n){ this.s.scene = n; this.s.mode='scene'; this.send(FAIRY.scene(n, this.s.v));
+  scene(n){ this.diyEditing = false; this.s.scene = n; this.s.mode='scene'; this.send(FAIRY.scene(n, this.s.v));
     if (this.el){ const i = $('.sceneIn', this.el); if (i && document.activeElement!==i) i.value = n; this.renderFavs(); } }
+
+  /* ---- Hello Fairy DIY painter ---- */
+  diyN(){ return (store.get()[this.id]||{}).diyN || 26; }
+  diyCells(){
+    const saved = (store.get()[this.id]||{}).diyCells;
+    const n = this.diyN();
+    return Array.from({length:n}, (_,i) => saved && saved[i] ? saved[i] : null);   // null = unpainted
+  }
+  wireDiy(q){
+    if (!q('.diy')) return;
+    this.brush = this.brush || {h:0};
+    const PAL = [{h:0},{h:30},{h:55},{h:120},{h:180},{h:230},{h:270},{h:320},{white:true},{off:true}];
+    const css = c => c.off ? 'repeating-linear-gradient(45deg,#222 0 5px,#444 5px 10px)' : c.white ? '#fff' : `hsl(${c.h},100%,50%)`;
+    const pal = q('.pal');
+    pal.innerHTML = PAL.map((c,i) => `<button data-i="${i}" style="background:${css(c)}" aria-label="${c.off?'Off':c.white?'White':'Hue '+c.h}"></button>`).join('');
+    const markSel = () => pal.querySelectorAll('button').forEach((b,i) =>
+      b.classList.toggle('sel', JSON.stringify(PAL[i]) === JSON.stringify(this.brush)));
+    pal.onclick = e => { const b = e.target.closest('button'); if (!b) return; this.brush = PAL[+b.dataset.i]; markSel(); };
+    markSel();
+
+    const grid = q('.diygrid');
+    const draw = () => {
+      const cells = this.diyCells();
+      grid.innerHTML = cells.map((c,i) => `<button class="cell" data-i="${i}" style="background:${c ? css(c) : '#22222e'}">${i+1}</button>`).join('');
+    };
+    const save = cells => store.patch(this.id, {diyCells: cells});
+    const wire = c => c.off ? [0, 0] : [c.white ? DIY_WHITE : hueByte(c.h), 0xfa];
+    const motion = () => +q('.diyMotion').value, speed = () => +q('.diySpd').value;
+    const edit = () => { if (!this.diyEditing){ this.send(FAIRY.diyMap()); this.send(FAIRY.diyState(motion(), speed(), 0)); this.diyEditing = true; } };
+    const sendCells = list => FAIRY.diyPaint(list).forEach(b => this.send(b));
+    const play = () => { this.send(FAIRY.diyState(motion(), speed(), 1)); this.diyEditing = false; this.s.mode = 'diy'; };
+    draw();
+
+    grid.onclick = e => {
+      const b = e.target.closest('.cell'); if (!b) return;
+      const i = +b.dataset.i, cells = this.diyCells();
+      cells[i] = {...this.brush}; save(cells); draw();
+      if (this.loop) this.stopLoop();
+      edit(); sendCells([[i, ...wire(this.brush)]]);
+    };
+    q('.diyFill').onclick = () => {
+      const cells = this.diyCells().map(() => ({...this.brush})); save(cells); draw();
+      edit(); sendCells(cells.map((c,i) => [i, ...wire(c)]));
+    };
+    q('.diyClear').onclick = () => {
+      const cells = this.diyCells().map(() => null); save(cells); draw();
+      edit(); sendCells(cells.map((_,i) => [i, 0, 0]));
+    };
+    q('.diyPlay').onclick = () => {
+      // resend the whole pattern so the curtain matches what's on screen, then play it
+      edit(); sendCells(this.diyCells().map((c,i) => [i, ...(c ? wire(c) : [0,0])])); play();
+    };
+    q('.diyMotion').onchange = () => { if (this.s.mode==='diy' || this.diyEditing) play(); };
+    q('.diySpd').oninput = e => q('.diySpdV').textContent = e.target.value;
+    q('.diySpd').onchange = () => { if (this.s.mode==='diy' || this.diyEditing) play(); };
+
+    // saved patterns
+    const pats = () => (store.get()[this.id]||{}).diyPats || [];
+    const drawPats = () => {
+      const box = q('.diyPats'), list = pats();
+      box.innerHTML = list.length ? list.map((p,i) => `<button class="fav" data-i="${i}">${p.name.replace(/[<>&"]/g,'')}<span class="x" data-del="${i}">✕</span></button>`).join('')
+        : '<span class="meta">Paint something, then tap 💾 Save.</span>';
+      box.querySelectorAll('.fav').forEach(b => b.onclick = e => {
+        const d = e.target.dataset.del, list = pats();
+        if (d !== undefined){ list.splice(+d,1); store.patch(this.id,{diyPats:list}); drawPats(); return; }
+        const p = list[+b.dataset.i]; save(p.cells); q('.diyMotion').value = p.motion; q('.diySpd').value = p.speed;
+        q('.diySpdV').textContent = p.speed; draw(); q('.diyPlay').onclick();
+      });
+    };
+    q('.diySave').onclick = () => {
+      const list = pats(); const name = `Pattern ${list.length+1}`;
+      list.push({name, cells:this.diyCells(), motion:motion(), speed:speed()});
+      store.patch(this.id,{diyPats:list}); drawPats();
+    };
+    drawPats();
+    const nIn = q('.diyN');
+    if (nIn) nIn.onchange = e => { const n = Math.max(1, Math.min(400, parseInt(e.target.value,10)||26));
+      store.patch(this.id,{diyN:n}); e.target.value = n; draw(); };
+  }
 
   /* ---- Hello Fairy favorites + loop (runs while the page is open) ---- */
   favs(){ return [...((store.get()[this.id]||{}).favs || [])]; }
@@ -496,6 +602,27 @@ class Light {
         <div class="row space"><span class="meta">Scene (1–${FAIRY_SCENES})</span>
           <div class="stepper"><button class="sm prev">◀</button><input class="sceneIn" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="${FAIRY_SCENES}" value="${this.s.scene}" aria-label="Scene number"><button class="sm next">▶</button><button class="sm play">Play</button></div>
         </div>
+        <details class="diy"><summary>🎨 DIY paint (per section)</summary>
+          <div class="stack" style="margin-top:8px">
+            <div class="pal"></div>
+            <div class="diygrid"></div>
+            <div class="row">
+              <button class="sm grow diyFill">Fill all</button>
+              <button class="sm grow diyClear">Clear</button>
+              <button class="sm grow primary diyPlay">▶ Show it</button>
+            </div>
+            <div><label class="lbl"><span>Motion</span></label>
+              <select class="diyMotion">
+                <option value="0">Static</option>
+                ${[1,2,3,4,5,6,7].map(n=>`<option value="${n}">Motion ${n}</option>`).join('')}
+              </select></div>
+            <div><label class="lbl"><span>Motion speed</span><span class="diySpdV">100</span></label>
+              <input type="range" class="diySpd" min="1" max="100" value="100"></div>
+            <div class="row space"><span class="meta">Saved patterns</span><button class="sm diySave">💾 Save</button></div>
+            <div class="favs diyPats"></div>
+            <p class="meta" style="margin:0">Tap sections to paint; the curtain previews as you go. Your curtain reports 26 sections; change the count under Advanced if yours differs. Static and Motion 3 match what the official app sends; the other motions are untested, so try them.</p>
+          </div>
+        </details>
         <div class="row space"><span class="meta">Favorites</span>
           <button class="sm favAdd">★ Save scene</button></div>
         <div class="favs"></div>
@@ -511,6 +638,8 @@ class Light {
           <input type="text" class="raw grow" placeholder="raw hex, e.g. 7e 00 04 f0 00 01 ff 00 ef">
           <button class="sm sendRaw">Send</button>
         </div>
+        ${this.type==='fairy' ? `<div class="row" style="margin-top:8px"><span class="meta grow">DIY section count</span>
+          <input type="number" class="diyN" min="1" max="400" style="width:90px" value="${this.diyN()}"></div>` : ''}
         <div class="row" style="margin-top:8px"><button class="sm forget">Disconnect &amp; remove</button></div>
       </details>`;
     const q = s => $(s, this.el);
@@ -540,6 +669,7 @@ class Light {
       q('.next').onclick = () => { this.scene(this.s.scene>=FAIRY_SCENES?1:this.s.scene+1); show(); };
       q('.play').onclick = jump;
       this.renderFavs();
+      this.wireDiy(q);
       q('.favAdd').onclick = () => {
         const n = this.s.scene; const favs = this.favs();
         if (!favs.includes(n)) { favs.push(n); store.patch(this.id,{favs}); }
