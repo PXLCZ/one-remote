@@ -121,6 +121,30 @@
   <p class="meta" style="margin:0">Master controls apply to every connected light with "In All" checked. The sleep timer turns those lights off when it ends, as long as this page stays open.</p>
 </section>
 
+<section class="card stack" id="fxCard">
+  <div class="row space">
+    <h2>Effects</h2>
+    <button class="sm" id="fxStop" hidden>Stop</button>
+  </div>
+  <div>
+    <div class="seg" id="fxList">
+      <button data-fx="rainbow">Rainbow</button>
+      <button data-fx="fade">Fade</button>
+      <button data-fx="jump">Jump</button>
+      <button data-fx="breathe">Breathe</button>
+      <button data-fx="xmas">Christmas</button>
+      <button data-fx="candle">Candle</button>
+    </div>
+    <p class="meta" id="fxHelp" style="margin:6px 0 0">Pick an effect to run it on every light in "All", in step.</p>
+  </div>
+  <div>
+    <label class="lbl"><span>Speed</span><span id="fxSpdV">50%</span></label>
+    <input type="range" min="1" max="100" value="50" id="fxSpd">
+  </div>
+  <label class="chk"><input type="checkbox" id="fxSpread"> Give each light a different color</label>
+  <p class="meta" style="margin:0">Effects run in this page, like Sound mode, so keep it open. The master brightness dims them. Tap the effect again, or Stop, to end it.</p>
+</section>
+
 <section class="card stack" id="sound">
   <div class="row space">
     <h2>Sound mode</h2>
@@ -761,12 +785,14 @@ async function attach(device){
 
 /* ---- master panel ---- */
 document.querySelectorAll('[data-all-power]').forEach(b =>
-  b.onclick = () => targets().forEach(l => l.power(b.dataset.allPower==='1')));
+  b.onclick = () => { if (b.dataset.allPower==='0') stopFx(); targets().forEach(l => l.power(b.dataset.allPower==='1')); });
 buildSwatches($('#masterSw'),
-  (h,s) => targets().forEach(l => l.color(h,s)));
-$('#mHue').oninput = e => targets().forEach(l => l.color(+e.target.value, 100, true));
+  (h,s) => { stopFx(); targets().forEach(l => l.color(h,s)); });
+// while Breathe runs, the hue slider steers its color instead of stopping it
+$('#mHue').oninput = e => { if (fx.name==='breathe') return; stopFx(); targets().forEach(l => l.color(+e.target.value, 100, true)); };
 $('#mBri').oninput = e => {
   $('#mBriV').textContent = e.target.value + '%';
+  if (fx.timer) return;   // a running effect reads this slider on its next frame
   targets().forEach(l => { l.brightness(+e.target.value, true); const s=$('.bri',l.el); if(s) s.value=e.target.value; });
 };
 
@@ -779,7 +805,7 @@ function sleepTick(){
   const left = sleep.end - Date.now();
   if (left <= 0){
     clearInterval(sleep.t); sleep.t = null; $('#sleepV').textContent = ''; $('#sleepSel').value = '0';
-    stopSound(); lights.forEach(l => l.stopLoop?.(true));
+    stopSound(); stopFx(); lights.forEach(l => l.stopLoop?.(true));
     targets().forEach(l => l.power(false)); log('Sleep timer: lights off');
     return;
   }
@@ -811,7 +837,7 @@ $('#sndMode').onclick = e => {
 $('#sens').oninput = e => $('#sensV').textContent = e.target.value + '%';
 
 async function startMic(){
-  stopSound();
+  stopSound(); stopFx();
   const gum = navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
   if (!gum){ showError('This browser does not allow microphone access. Use tap tempo (BPM) below instead.'); return; }
   try {
@@ -827,7 +853,7 @@ async function startMic(){
 }
 
 function startBpm(){
-  stopSound();
+  stopSound(); stopFx();
   snd.src = 'bpm'; snd.nextBeat = performance.now(); begin();
   log(`Sound mode: ${snd.bpm} BPM`);
 }
@@ -918,6 +944,76 @@ $('#tapBtn').onclick = () => {
     if (snd.src==='bpm') snd.nextBeat = t + 60000/snd.bpm;   // re-sync phase to your tap
   }
 };
+
+/* ---- effects: this page works out every frame and sends it to all lights in "All", in step ---- */
+const FX_HELP = {
+  rainbow:'Rainbow: colors roll smoothly around the wheel.',
+  fade:'Fade: each color fades in and out, then the next one.',
+  jump:'Jump: snaps from color to color.',
+  breathe:'Breathe: brightness rises and falls, in the master hue.',
+  xmas:'Christmas: red and green take turns.',
+  candle:'Candle: a warm, flickering glow.',
+};
+const FX_IDLE = 'Pick an effect to run it on every light in "All", in step.';
+const FX_COLORS = [0, 30, 60, 120, 180, 240, 285];   // red, orange, yellow, green, cyan, blue, purple
+const FX_PERIOD = {                                 // seconds per cycle (or per color) at speed 1 → speed 100
+  rainbow:[60, 2], fade:[8, 0.8], jump:[4, 0.25], breathe:[10, 1], xmas:[4, 0.3], candle:[0.5, 0.08] };
+const fx = { name:null, timer:null, phase:0, last:0, sent:new Map(), flame:new Map() };
+
+// [hue°, saturation %, value 0-1] for light i of n at the current phase
+function fxFrame(l, i, n){
+  const spread = $('#fxSpread').checked, step = Math.floor(fx.phase), frac = fx.phase - step;
+  const pick = list => list[(step + (spread ? Math.round(i * list.length / n) : 0)) % list.length];
+  switch (fx.name){
+    case 'rainbow': return [(fx.phase + (spread ? i / n : 0)) % 1 * 360, 100, 1];
+    case 'fade':    return [pick(FX_COLORS), 100, Math.sin(Math.PI * frac)];
+    case 'jump':    return [pick(FX_COLORS), 100, 1];
+    case 'breathe': return [+$('#mHue').value + (spread ? i * 360 / n : 0), 100, 0.08 + 0.92 * (0.5 - 0.5 * Math.cos(2 * Math.PI * frac))];
+    case 'xmas':    return [pick([0, 120]), 100, 1];
+    case 'candle': {   // each light drifts toward a new random warm target every step
+      let f = fx.flame.get(l);
+      if (!f) fx.flame.set(l, f = { h:25, v:0.8, th:25, tv:0.8, step:-1 });
+      if (f.step !== step){ f.step = step; f.th = 18 + Math.random()*14; f.tv = 0.35 + Math.random()*0.65; }
+      f.h += (f.th - f.h) * 0.5; f.v += (f.tv - f.v) * 0.5;
+      return [f.h, 100, f.v];
+    }
+  }
+}
+
+function fxTick(){
+  const now = performance.now(), [slow, fast] = FX_PERIOD[fx.name];
+  fx.phase += (now - fx.last) / 1000 / (slow * Math.pow(fast/slow, (+$('#fxSpd').value - 1) / 99));
+  fx.last = now;
+  const dim = +$('#mBri').value / 100, ls = targets().filter(l => l.s.on);
+  ls.forEach((l, i) => {
+    const [h0, s, v0] = fxFrame(l, i, ls.length);
+    const h = Math.round(((h0 % 360) + 360) % 360) % 360, v = Math.max(0, Math.min(1, v0 * dim));
+    const rgb = hsvToRgb(h, s, v*100);
+    const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
+    const key = bytes.join();
+    if (fx.sent.get(l) !== key){ fx.sent.set(l, key); l.sendLatest('fx', bytes); }   // only send changes
+  });
+}
+
+function startFx(name){
+  stopSound(); lights.forEach(l => l.stopLoop?.(true));
+  clearInterval(fx.timer);
+  Object.assign(fx, { name, phase:0, last:performance.now(), sent:new Map(), flame:new Map() });
+  fx.timer = setInterval(fxTick, 100); fxTick();
+  [...$('#fxList').children].forEach(b => b.classList.toggle('sel', b.dataset.fx===name));
+  $('#fxHelp').textContent = FX_HELP[name]; $('#fxStop').hidden = false;
+  log(`Effect: ${name}`);
+}
+function stopFx(){
+  if (!fx.timer) return;
+  clearInterval(fx.timer); Object.assign(fx, { name:null, timer:null });
+  [...$('#fxList').children].forEach(b => b.classList.remove('sel'));
+  $('#fxHelp').textContent = FX_IDLE; $('#fxStop').hidden = true;
+  log('Effect stopped');
+}
+$('#fxList').onclick = e => { const b = e.target.closest('button'); if (b) b.dataset.fx===fx.name ? stopFx() : startFx(b.dataset.fx); };
+$('#fxStop').onclick = stopFx;
+$('#fxSpd').oninput = e => $('#fxSpdV').textContent = e.target.value + '%';
 
 /* ---- startup ---- */
 (async function init(){

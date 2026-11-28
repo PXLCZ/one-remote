@@ -19,6 +19,7 @@ Live at **https://pxlcz.github.io/one-remote/** (GitHub Pages, `main` branch, ro
 
 ## Features in the app
 - **All Lights:** on/off, color swatches, hue, brightness, sleep timer.
+- **Effects:** Rainbow, Fade, Jump, Breathe, Christmas and Candle on every light in All, in step, with a speed slider and an option to give each light a different color. Like Sound mode, the page works out each frame and sends it in each light's own protocol, so different brands stay in sync. The lights' built-in effects can't do that, because each runs on its own controller.
 - **Sound mode:** mic-reactive Energy / Rhythm / Roll / Spectrum, plus a tap-tempo BPM fallback.
 - **Per light:** rename, "In All" toggle, color, hue, brightness, raw hex sender (Advanced), Bluetooth log.
 - **ELK:** 22 built-in effects plus speed.
