@@ -204,33 +204,45 @@ function family(v) {
 const isFairyFrame = v => v.length >= 4 && v[0] === 0xaa && v[2] === v.length - 4;
 const isKeepAlive = v => v.length === 20 && v[0] === 0xaa && v[1] === 0x01;
 
+const fairyChecksumOk = v => v[v.length - 1] === 0xbb || v[v.length - 1] === sum8(v.subarray(0, v.length - 1));
+
 function meaning(v, linkFamily) {
-  if (linkFamily === 'Fairy' && isFairyFrame(v)) return fairy(v);
+  // on a Hello Fairy link, also accept frames whose length byte is off (the official app's scene command)
+  if (linkFamily === 'Fairy' && v.length >= 4 && v[0] === 0xaa && (isFairyFrame(v) || fairyChecksumOk(v))) return fairy(v);
   const f = family(v);
   return f === 'Fairy' ? fairy(v) : f === 'ELK' ? elk(v) : f === 'Govee' ? govee(v) : '';
 }
 
-// Frame: AA CMD LEN data… CK (CK = sum of the earlier bytes, or a literal BB)
+// Frame: AA CMD LEN data… CK (CK = sum of the earlier bytes, or a literal BB). Commands: see NOTES.md.
+const HUE_NAME = { 0xfe: 'FE (blank?)', 0xff: 'white' };
 function fairy(v) {
   const n = v.length, cmd = v[1], d = v.subarray(3, n - 1), ck = v[n - 1], want = sum8(v.subarray(0, n - 1));
   const u16 = i => d[i] << 8 | d[i + 1];
+  const hue = b => b <= 0xb3 ? `${b * 2}°` : HUE_NAME[b] || `hue ${h2(b)}`;
   let m;
   if (cmd === 0x00 && !d.length) m = 'hello';
+  else if (cmd === 0x00 && d.length > 8) m = `device info: firmware ${new TextDecoder().decode(d.subarray(0, d.indexOf(0) < 0 ? 8 : d.indexOf(0)))}`;
+  else if (cmd === 0x01 && !d.length) m = 'status query';
+  else if (cmd === 0x01 && d.length === 8) m = `status: ${hex(d)}`;
   else if (cmd === 0x02 && d.length === 1) m = `power ${d[0] ? 'on' : 'off'}`;
   else if (cmd === 0x03 && d.length === 7 && d[0] === 1) m = `color: hue ${u16(1)}°, saturation ${u16(3) / 10}%, brightness ${u16(5) / 10}%`;
-  else if (cmd === 0x03 && d.length === 4 && d[0] === 2) m = `scene ${d[1]}, brightness ${u16(2) / 10}%`;
+  else if (cmd === 0x03 && d[0] === 2 && d.length >= 8 && d.length === 8 + 2 * d[7]) {
+    m = `scene ${d[3]} info: ${d[7]} colors: ${Array.from(d.subarray(8, 8 + d[7]), hue).join(', ')}`;
+  } else if (cmd === 0x03 && d.length >= 4 && d[0] === 2) m = `scene ${d[1]}, brightness ${u16(2) / 10}%` + (d.length > 4 ? `, then ${hex(d, 4)}` : '');
+  else if (cmd === 0x05 && d.length === 7) {
+    const t = new Date((d[0] * 2 ** 24 + (d[1] << 16 | d[2] << 8 | d[3])) * 1000);
+    m = `clock sync: ${t.toISOString().slice(0, 19).replace('T', ' ')} UTC, then ${hex(d, 4)}`;
+  } else if (cmd === 0xa6 && d.length === 1) m = `DIY order map received (${d[0]} entries)`;
   else if (cmd === 0xa6) m = `DIY order map, ${d.length} entries` + (d.every((b, i) => b === i) ? ' (identity: 0, 1, 2 …)' : `: ${hex(d)}`);
   else if (cmd === 0xd0 && d.length === 4) {
     m = `DIY state: motion ${d[0]}, byte 2 = ${d[1]}, speed ${d[2]}, status ${h2(d[3])}` + ({ 0: ' (edit)', 1: ' (play)' }[d[3]] || ' (unknown)');
   } else if (cmd === 0xc4 && d.length >= 5 && (d.length - 1) % 4 === 0) {
     const cells = [];
-    for (let i = 1; i < d.length; i += 4) {
-      const hb = d[i + 2];
-      cells.push(`#${d[i] << 8 | d[i + 1]} ${hb <= 0xb3 ? `${hb * 2}°` : `hue ${h2(hb)}`} val ${h2(d[i + 3])}`);
-    }
+    for (let i = 1; i < d.length; i += 4) cells.push(`#${d[i] << 8 | d[i + 1]} ${hue(d[i + 2])} ${Math.round(d[i + 3] / 2.5)}%`);
     m = `DIY paint, ${cells.length} section${cells.length > 1 ? 's' : ''}${d[0] ? `, first byte ${h2(d[0])}` : ''}:`;
     for (let i = 0; i < cells.length; i += 6) m += '\n  ' + cells.slice(i, i + 6).join(' · ');
   } else m = `UNKNOWN command ${h2(cmd)}, ${d.length} data byte${d.length === 1 ? '' : 's'}`;
+  if (v[2] !== n - 4) m += `  [length byte says ${v[2]}, frame carries ${n - 4}]`;
   return 'Hello Fairy · ' + m + (ck === want || ck === 0xbb ? '' : `  [checksum ${h2(ck)}, expected ${h2(want)} or BB]`);
 }
 

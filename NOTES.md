@@ -22,7 +22,7 @@ Live at **https://pxlcz.github.io/one-remote/** (GitHub Pages, `main` branch, ro
 - **Sound mode:** mic-reactive Energy / Rhythm / Roll / Spectrum, plus a tap-tempo BPM fallback.
 - **Per light:** rename, "In All" toggle, color, hue, brightness, raw hex sender (Advanced), Bluetooth log.
 - **ELK:** 22 built-in effects plus speed.
-- **Hello Fairy:** scenes 1–58 (type a number to jump), favorites, scene loop, **DIY per-section painter** with motion, speed and saved patterns.
+- **Hello Fairy:** scenes 1–58 (type a number to jump), favorites, scene loop, **DIY per-section painter** with motion, speed, brightness and saved patterns.
 - **Govee:** color-command style picker (Auto / Classic / Bulb / Segmented) and a keep-alive.
 
 ## Protocols
@@ -45,19 +45,30 @@ Frame: `AA CMD LEN data… CK`. CK is the sum of the previous bytes mod 256, but
 - **HSV color:** `AA 03 07 01 HHhh SSss VVvv`. Hue 0–359; sat and val are 0–1000 (percent × 10).
 - **Scene:** `AA 03 04 02 NN VVvv`
 
-**DIY, decoded from a PacketLogger trace of the official app (2026-11-27):**
-- **Order map:** `AA A6 B2 00 01 … B1 CK`. This identity table of 178 entries is sent before DIY.
+**DIY, decoded from PacketLogger traces of the official app (2026-11-27 and 2026-11-28):**
+- **Order map:** `AA A6 B2 00 01 … B1 CK`. This identity table of 178 entries is sent before DIY, and the light answers `AA A6 01 B2 03`.
 - **State:** `AA D0 04 MM 64 SS ST BB`
-  - MM is motion: 0 = static, 3 was seen; others untested.
+  - MM is motion: 0 = static. The app's two motion buttons sent 4 and then 3 when tapped in order; 1, 2 and 5–7 are untested.
+  - The `64` never changes, not even when the brightness slider moves.
   - SS is speed, 1–100.
-  - ST is 00 = editing, 01 = playing (03 also seen, meaning unknown).
+  - ST is 00 = editing, 01 = playing. The app also sends 03 as DIY opens, just before 00; meaning unknown.
 - **Paint:** `AA C4 LEN 00 [IDhi IDlo HUE VAL]×n BB`
-  - HUE is hue° / 2 (00 = red, 3C = green).
-  - VAL was always `FA` in the app.
+  - HUE is hue° / 2 (00 = red, 3C = green), and `FF` is white.
+  - VAL is brightness: 0–250, where `FA` is full and `00` is off. The app's DIY brightness slider repaints every section with VAL = ⌊percent × 2.5⌋, about every 50 ms while dragging.
   - At most 24 sections per packet.
+  - Two single-section paints started with `01` instead of `00`; meaning unknown.
+- **Opening DIY**, the app sends the order map, state 03, state 00, its saved canvas, then state 01.
 - The curtain reports **26 DIY sections** (indices 0–25).
-- **Still unconfirmed:** white (currently sends HUE `FF`), blank/off (currently sends HUE 0 with VAL `00`), what motion values other than 0 and 3 do, and which physical snowflake each section maps to.
+- **Still unconfirmed:** what HUE `FE` means (the app filled the whole canvas with it several times; probably blank), the names of the two motion buttons, what `AA D7 02 01 00 DD` does (seen once), and which physical snowflake each section maps to. One Remote sends blank as HUE 0 with VAL `00`.
 - The curtain has no text feature (snowflakes, not a matrix).
+
+**What the official app sends on connect:**
+1. It turns on notifications (handles `0x0006` and `0x000C`).
+2. Clock sync: `AA 05 07 TT TT TT TT 00 02 58 BB`, where TT is the Unix time, big-endian. The last three bytes never changed.
+3. `AA 00 00 BB`. The light replies with its firmware version (`3.1.4M89`) and `1A` (26, the section count).
+4. It queries `AA 0C 00 BB` (the reply is `64`), `AA 19 00 BB` and `AA 01 00 AB` (status), then sends `AA 20 03 00 01 00 BB`. Their meaning is unknown, and One Remote works without them.
+
+**Scenes from the official app:** `AA 03 07 02 NN 03 E8 00 64 00 FF CK`. Its length byte says 7, but the frame carries 8 bytes. The light replies with the scene number and a 7-color list: hues `00 3C 78 1E 5A 87 FF` (red, green, blue, yellow, cyan, purple, white), each with VAL `FA`. One Remote's shorter `AA 03 04 02 NN VVvv` also works.
 
 ### Govee
 - **Service:** `00010203-0405-0607-0809-0a0b0c0d1910`
@@ -78,7 +89,7 @@ Packets are 20 bytes: `33 CMD data…`, zero-padded, with byte 19 = XOR of bytes
 - **Nanoleaf Essentials:** proprietary BLE/Thread, so not feasible. A possible workaround is buttons that run iOS Shortcuts (`shortcuts://run-shortcut?name=…`) for lights that are in Apple Home.
 
 ## Open to-dos
-1. Capture one more trace in the Hello Fairy app's DIY: one white bulb, one blank bulb, each motion/direction button, and the brightness slider. Confirm the guesses above. Follow the checklist under "Next capture" below.
+1. Name the two DIY motion buttons (they send MM 4 and 3), and work out what HUE `FE` and `AA D7 02 01 00 DD` mean. The 2026-11-28 trace confirmed white, brightness, speed and the motion values.
 2. Map the 26 sections to physical snowflakes (paint section 1, see where it lights).
 3. Delete the Bluetooth logging profile from the iPhone afterwards (Settings → General → VPN & Device Management).
 
@@ -91,7 +102,7 @@ Packets are 20 bytes: `33 CMD data…`, zero-padded, with byte 19 = XOR of bytes
 
 File format, for decoding by hand: records are little-endian (4-byte length, 8-byte timestamp, 1-byte type, payload); some files are big-endian, and the decoder handles both. Types 2 and 3 are ACL TX/RX. Within ACL, L2CAP CID 4 carries ATT; opcode `0x52` is Write Command (handle `0x0009`) and `0x1B` is Notify (handle `0x000B`).
 
-### Next capture: checklist for to-do 1
+### Capture checklist (used for the 2026-11-28 trace)
 Leave about 5 seconds, hands off, between steps. The decoder starts a new step after each pause, so its steps line up with this list. Close One Remote first, since the curtain accepts only one connection, and check that the logging profile is still on the iPhone.
 
 In the Hello Fairy app:
