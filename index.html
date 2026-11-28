@@ -146,6 +146,7 @@
       <button data-fx="fire">Fire</button>
       <button data-fx="storm">Storm</button>
       <button data-fx="candy">Candy cane</button>
+      <button data-fx="christmas">Christmas</button>
     </div>
     <p class="meta" id="fxHelp" style="margin:6px 0 0">Pick an effect to run it on every light in "All", in step.</p>
   </div>
@@ -1014,6 +1015,7 @@ const FX_HELP = {
   fire:'Fire: flames flicker up the curtain while the other lights glow with the fire.',
   storm:'Storm: dark blue rain, and lightning that flashes across the curtain and the other lights.',
   candy:'Candy cane: red and white stripes march along the curtain and through the other lights.',
+  christmas:'Christmas: red and green stripes march along the curtain and through the other lights, with the odd white sparkle.',
 };
 const FX_IDLE = 'Pick an effect to run it on every light in "All", in step.';
 const FX_COLORS = [0, 30, 60, 120, 180, 240, 285];   // red, orange, yellow, green, cyan, blue, purple
@@ -1053,6 +1055,13 @@ const PX = {
     if (st.f > 0) st.f--;
     for (let i = 0; i < n; i++) px[i] = flash && i >= st.a && i < st.b ? [220, 0, 1] : [225, 100, 0.05 + Math.random()*0.05]; } },
   candy:   { period:[6, 0.5], render(px, n, ph){ for (let i = 0; i < n; i++) px[i] = Math.floor(i/3 + ph*2) % 2 ? [0, 0, 1] : [0, 100, 1]; } },
+  christmas: { period:[6, 0.5], render(px, n, ph, st, k){   // marching red/green stripes; now and then a bulb glints white
+    if (!st.sp || st.sp.length !== n) st.sp = new Array(n).fill(0);
+    for (let i = 0; i < n; i++){
+      st.sp[i] *= 0.6;
+      if (Math.random() < 0.006 + k*0.01) st.sp[i] = 1;
+      px[i] = st.sp[i] > 0.35 ? [0, 0, 1] : Math.floor(i/3 + ph*2) % 2 ? [120, 100, 1] : [0, 100, 1];
+    } } },
 };
 const fx = { name:null, timer:null, phase:0, last:0, sent:new Map(), canvas:new Map(), st:{}, flame:new Map() };
 
