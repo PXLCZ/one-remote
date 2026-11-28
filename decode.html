@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0b10">
+<title>One Remote · Trace decoder</title>
+<style>
+  :root{
+    --bg:#0b0b10; --card:#15151d; --card2:#1d1d28; --line:#2a2a38;
+    --text:#f2f2f7; --dim:#9a9ab0; --accent:#ffb000; --bad:#ff5a5f;
+    --r:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+  body{max-width:1000px;margin:0 auto;padding:22px 16px 48px}
+  h1{font-size:26px;margin:0 0 8px;letter-spacing:-.5px}
+  h1 span{color:var(--accent)}
+  p{margin:0 0 8px;color:var(--dim);max-width:72ch}
+  code{font:13px ui-monospace,Menlo,monospace;color:var(--text)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin:14px 0}
+  #drop{display:block;border:2px dashed var(--line);border-radius:14px;padding:28px 12px;text-align:center;color:var(--dim);cursor:pointer}
+  #drop:hover,#drop:focus-visible,#drop.over{border-color:var(--accent);color:var(--text);outline:none}
+  .row{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:center;margin-top:14px}
+  .opt{font-size:14px;color:var(--dim);display:flex;align-items:center;gap:8px}
+  input[type=checkbox]{width:18px;height:18px;margin:0;accent-color:var(--accent)}
+  input[type=number]{width:70px;font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:5px 8px}
+  button{font:inherit;font-weight:700;color:#111;background:var(--accent);border:0;border-radius:12px;padding:10px 16px;min-height:44px;cursor:pointer;margin-left:auto}
+  button:disabled{opacity:.35;cursor:default}
+  #summary{font-size:14px;margin:0 2px}
+  #out{font:12.5px/1.5 ui-monospace,Menlo,monospace;white-space:pre;overflow:auto;max-height:72vh;margin:0}
+  #out.err{color:var(--bad);white-space:pre-wrap}
+</style>
+</head>
+<body>
+<h1>One <span>Remote</span> · trace decoder</h1>
+<p>Turns a PacketLogger trace (<code>.pklg</code>) into a readable list of the packets an official app sent to the lights, split into steps wherever you paused. The file is read inside this page and is never uploaded.</p>
+<p>A raw trace holds all of the phone's Bluetooth traffic, so share the decoded text rather than the <code>.pklg</code> itself.</p>
+
+<div class="card">
+  <label id="drop" for="file" tabindex="0">Drop a <code>.pklg</code> file here, or click to choose one</label>
+  <input type="file" id="file" hidden>
+  <div class="row">
+    <label class="opt"><input type="checkbox" id="onlyLights" checked> Only light connections</label>
+    <label class="opt"><input type="checkbox" id="hideKA" checked> Hide Govee keep-alives</label>
+    <label class="opt"><input type="checkbox" id="fullHex"> Full hex for long packets</label>
+    <label class="opt">New step after a pause of <input type="number" id="gap" value="1.5" min="0.2" step="0.1"> s</label>
+    <button id="copy" disabled>Copy result</button>
+  </div>
+</div>
+<p id="summary"></p>
+<div class="card"><pre id="out">No trace loaded yet.</pre></div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const h2 = n => n.toString(16).padStart(2, '0').toUpperCase();
+const h4 = n => n.toString(16).padStart(4, '0').toUpperCase();
+const hex = (a, from = 0, to = a.length) => Array.from(a.subarray(from, to), h2).join(' ');
+const sum8 = a => a.reduce((s, b) => s + b, 0) & 255;
+const LIGHT_NAME = /fairy|elk|bledom|bleddm|lotus|duoco|govee|ihoment/i;
+const OPS = { 0x52: 'W', 0x12: 'W*', 0x1b: 'N', 0x1d: 'I' };
+const MAX_LINES = 20000;
+
+/* ---------- PacketLogger records ----------
+   u32 length (counts everything after itself), 8-byte timestamp, u8 type, payload.
+   Newer files are little-endian, older ones big-endian. The timestamp is seconds plus
+   microseconds in either order, so the word that always stays below 1,000,000 is the microseconds. */
+function readRecords(buf) {
+  const dv = new DataView(buf), size = buf.byteLength;
+  const walk = le => {
+    const offs = []; let off = 0;
+    while (off + 13 <= size) {
+      const len = dv.getUint32(off, le);
+      if (len < 9 || off + 4 + len > size) break;
+      offs.push(off); off += 4 + len;
+    }
+    return { offs, end: off, le };
+  };
+  const a = walk(true), b = walk(false), w = a.end >= b.end ? a : b;
+  let firstSmall = 0, secondSmall = 0;
+  for (const off of w.offs) {
+    if (dv.getUint32(off + 4, w.le) < 1e6) firstSmall++;
+    if (dv.getUint32(off + 8, w.le) < 1e6) secondSmall++;
+  }
+  const usFirst = firstSmall > secondSmall;
+  const recs = w.offs.map(off => {
+    const len = dv.getUint32(off, w.le), x = dv.getUint32(off + 4, w.le), y = dv.getUint32(off + 8, w.le);
+    return { t: usFirst ? y + x / 1e6 : x + y / 1e6, type: dv.getUint8(off + 12), data: new Uint8Array(buf, off + 13, len - 9) };
+  });
+  return { recs, end: w.end, size };
+}
+
+/* ---------- HCI → L2CAP → ATT ----------
+   Record type 1 = HCI event, 2 = ACL sent, 3 = ACL received. ATT rides on L2CAP channel 4. */
+function decodeTrace(buf) {
+  const { recs, end, size } = readRecords(buf);
+  if (!recs.length) throw new Error("This doesn't look like a PacketLogger .pklg file.");
+  const names = new Map();   // address → advertised name
+  const live = new Map();    // connection handle → link currently using it
+  const links = [];          // every link seen, in order
+  const frag = new Map();    // partial L2CAP PDUs, per handle and direction
+  const prep = new Map();    // queued ATT prepare-writes (long writes)
+  const events = [];
+
+  const newLink = (h, addr = null) => {
+    const l = { handle: h, addr, name: null, light: false, family: null };
+    live.set(h, l); links.push(l); return l;
+  };
+  const addrAt = (d, i) => Array.from(d.subarray(i, i + 6)).reverse().map(h2).join(':');
+  const nameIn = d => {                                   // local name from advertising data
+    for (let p = 0; p + 1 < d.length && d[p]; p += 1 + d[p]) {
+      if (d[p + 1] === 0x08 || d[p + 1] === 0x09) return new TextDecoder().decode(d.subarray(p + 2, p + 1 + d[p]));
+    }
+    return null;
+  };
+
+  function hciEvent(t, d) {
+    if (d[0] === 0x05 && d.length >= 6 && d[2] === 0) {   // Disconnection Complete
+      const h = (d[3] | d[4] << 8) & 0x0fff, l = live.get(h);
+      if (l) { events.push({ t, kind: 'disc', link: l, reason: d[5] }); live.delete(h); }
+    } else if (d[0] === 0x3e && d.length >= 4) {           // LE Meta event
+      const sub = d[2];
+      if ((sub === 0x01 || sub === 0x0a) && d.length >= 14 && d[3] === 0) {   // (Enhanced) Connection Complete
+        const l = newLink((d[4] | d[5] << 8) & 0x0fff, addrAt(d, 8));
+        l.name = names.get(l.addr) || null;
+        events.push({ t, kind: 'conn', link: l });
+      } else if (sub === 0x02) {                           // Advertising Report
+        for (let k = 0, p = 4; k < d[3] && p + 9 <= d.length; k++) {
+          const len = d[p + 8], name = nameIn(d.subarray(p + 9, p + 9 + len));
+          if (name) names.set(addrAt(d, p + 2), name);
+          p += 10 + len;
+        }
+      } else if (sub === 0x0d) {                           // Extended Advertising Report
+        for (let k = 0, p = 4; k < d[3] && p + 24 <= d.length; k++) {
+          const len = d[p + 23], name = nameIn(d.subarray(p + 24, p + 24 + len));
+          if (name) names.set(addrAt(d, p + 3), name);
+          p += 24 + len;
+        }
+      }
+    }
+  }
+
+  function acl(t, d, dir) {
+    if (d.length < 4) return;
+    const h = (d[0] | d[1] << 8) & 0x0fff, pb = d[1] >> 4 & 3, key = h + dir;
+    const body = d.subarray(4, 4 + (d[2] | d[3] << 8));
+    if (pb === 1) {                                        // continuation fragment
+      const f = frag.get(key);
+      if (!f) return;
+      f.bytes.push(...body);
+      if (f.bytes.length >= f.need) { frag.delete(key); l2cap(f.t, h, dir, f.cid, Uint8Array.from(f.bytes.slice(0, f.need))); }
+    } else if (body.length >= 4) {                         // first fragment
+      const need = body[0] | body[1] << 8, cid = body[2] | body[3] << 8, pdu = body.subarray(4);
+      if (pdu.length >= need) l2cap(t, h, dir, cid, pdu.subarray(0, need));
+      else frag.set(key, { t, cid, need, bytes: Array.from(pdu) });
+    }
+  }
+
+  function l2cap(t, h, dir, cid, a) {
+    if (cid !== 4 || !a.length) return;
+    const op = a[0], at = a[1] | a[2] << 8, key = h + dir;
+    if (OPS[op] && a.length >= 3) attPacket(t, h, dir, op, at, a.subarray(3));
+    else if (op === 0x16 && a.length >= 5) {               // Prepare Write (long write)
+      if (!prep.has(key)) prep.set(key, []);
+      prep.get(key).push({ at, off: a[3] | a[4] << 8, v: a.subarray(5) });
+    } else if (op === 0x18) {                              // Execute Write
+      const parts = prep.get(key) || [];
+      prep.delete(key);
+      if (a[1] === 1 && parts.length) {
+        const v = new Uint8Array(Math.max(...parts.map(p => p.off + p.v.length)));
+        parts.forEach(p => v.set(p.v, p.off));
+        attPacket(t, h, dir, 0x12, parts[0].at, v);
+      }
+    }
+  }
+
+  function attPacket(t, h, dir, op, at, value) {
+    const l = live.get(h) || newLink(h), fam = family(value);
+    if (fam) { l.light = true; l.family = l.family || fam; }
+    events.push({ t, kind: 'att', link: l, dir, op, at, value: Uint8Array.from(value) });
+  }
+
+  for (const r of recs) {
+    if (r.type === 0x01 && r.data.length >= 2) hciEvent(r.t, r.data);
+    else if (r.type === 0x02 || r.type === 0x03) acl(r.t, r.data, r.type === 0x02 ? 'tx' : 'rx');
+  }
+  for (const l of links) {
+    l.name = l.name || (l.addr && names.get(l.addr)) || null;
+    if (l.name && LIGHT_NAME.test(l.name)) l.light = true;
+  }
+  return { events, links, t0: recs[0].t, t1: recs[recs.length - 1].t, nRecs: recs.length, truncated: end < size };
+}
+
+/* ---------- light protocols (see NOTES.md) ---------- */
+function family(v) {
+  const n = v.length;
+  if (n === 9 && v[0] === 0x7e && v[8] === 0xef) return 'ELK';
+  if (n === 20 && [0x33, 0xaa, 0xa3].includes(v[0]) && v.subarray(0, 19).reduce((a, b) => a ^ b, 0) === v[19]) return 'Govee';
+  if (n >= 4 && v[0] === 0xaa && v[2] === n - 4) return 'Fairy';
+  return null;
+}
+const isFairyFrame = v => v.length >= 4 && v[0] === 0xaa && v[2] === v.length - 4;
+const isKeepAlive = v => v.length === 20 && v[0] === 0xaa && v[1] === 0x01;
+
+function meaning(v, linkFamily) {
+  if (linkFamily === 'Fairy' && isFairyFrame(v)) return fairy(v);
+  const f = family(v);
+  return f === 'Fairy' ? fairy(v) : f === 'ELK' ? elk(v) : f === 'Govee' ? govee(v) : '';
+}
+
+// Frame: AA CMD LEN data… CK (CK = sum of the earlier bytes, or a literal BB)
+function fairy(v) {
+  const n = v.length, cmd = v[1], d = v.subarray(3, n - 1), ck = v[n - 1], want = sum8(v.subarray(0, n - 1));
+  const u16 = i => d[i] << 8 | d[i + 1];
+  let m;
+  if (cmd === 0x00 && !d.length) m = 'hello';
+  else if (cmd === 0x02 && d.length === 1) m = `power ${d[0] ? 'on' : 'off'}`;
+  else if (cmd === 0x03 && d.length === 7 && d[0] === 1) m = `color: hue ${u16(1)}°, saturation ${u16(3) / 10}%, brightness ${u16(5) / 10}%`;
+  else if (cmd === 0x03 && d.length === 4 && d[0] === 2) m = `scene ${d[1]}, brightness ${u16(2) / 10}%`;
+  else if (cmd === 0xa6) m = `DIY order map, ${d.length} entries` + (d.every((b, i) => b === i) ? ' (identity: 0, 1, 2 …)' : `: ${hex(d)}`);
+  else if (cmd === 0xd0 && d.length === 4) {
+    m = `DIY state: motion ${d[0]}, byte 2 = ${d[1]}, speed ${d[2]}, status ${h2(d[3])}` + ({ 0: ' (edit)', 1: ' (play)' }[d[3]] || ' (unknown)');
+  } else if (cmd === 0xc4 && d.length >= 5 && (d.length - 1) % 4 === 0) {
+    const cells = [];
+    for (let i = 1; i < d.length; i += 4) {
+      const hb = d[i + 2];
+      cells.push(`#${d[i] << 8 | d[i + 1]} ${hb <= 0xb3 ? `${hb * 2}°` : `hue ${h2(hb)}`} val ${h2(d[i + 3])}`);
+    }
+    m = `DIY paint, ${cells.length} section${cells.length > 1 ? 's' : ''}${d[0] ? `, first byte ${h2(d[0])}` : ''}:`;
+    for (let i = 0; i < cells.length; i += 6) m += '\n  ' + cells.slice(i, i + 6).join(' · ');
+  } else m = `UNKNOWN command ${h2(cmd)}, ${d.length} data byte${d.length === 1 ? '' : 's'}`;
+  return 'Hello Fairy · ' + m + (ck === want || ck === 0xbb ? '' : `  [checksum ${h2(ck)}, expected ${h2(want)} or BB]`);
+}
+
+// Frame: 7E xx CMD … EF (9 bytes)
+function elk(v) {
+  const c = v[2], x = v[3];
+  const m = c === 0x01 ? `brightness ${x}`
+    : c === 0x02 ? `speed ${x}`
+    : c === 0x03 ? `effect ${h2(x)}`
+    : c === 0x04 ? `power ${x === 0xf0 ? 'on' : x === 0 ? 'off' : h2(x)}`
+    : c === 0x05 && x === 0x03 ? `color #${hex(v, 4, 7).replace(/ /g, '')}`
+    : `UNKNOWN command ${h2(c)}`;
+  return 'ELK · ' + m;
+}
+
+// Frame: 33 CMD data…, 20 bytes, last byte = XOR of the first 19
+function govee(v) {
+  const m = v[0] === 0xaa && v[1] === 0x01 ? 'keep-alive'
+    : v[0] === 0x33 && v[1] === 0x01 ? `power ${v[2] ? 'on' : 'off'}`
+    : v[0] === 0x33 && v[1] === 0x04 ? `brightness ${v[2]}`
+    : v[0] === 0x33 && v[1] === 0x05 ? `color, style ${h2(v[2])}: ${hex(v, 3, 19)}`
+    : `command ${h2(v[0])} ${h2(v[1])}`;
+  return 'Govee · ' + m;
+}
+
+/* ---------- page ---------- */
+let state = null, fileName = '';
+
+function render() {
+  if (!state) return;
+  const onlyLights = $('onlyLights').checked, hideKA = $('hideKA').checked, fullHex = $('fullHex').checked;
+  const gap = Math.max(0.2, parseFloat($('gap').value) || 1.5);
+  const { events, links, t0, t1, nRecs, truncated } = state;
+  const label = l => h4(l.handle) + (l.name ? ' ' + l.name : '') + (l.addr ? ` (${l.addr})` : '');
+  const lights = links.filter(l => l.light);
+  const out = [
+    `One Remote trace decode: ${fileName}`,
+    lights.length ? 'Light connections: ' + lights.map(label).join(', ') : 'No light traffic recognized in this trace.',
+    'Columns: time (s) · → phone to light, ← light to phone · connection · W write, W* write with response, N notify, I indicate · ATT handle · bytes',
+  ];
+  let lastTx = null, steps = 0, shown = 0, cut = false;
+  for (const e of events) {
+    if (out.length >= MAX_LINES) { cut = true; break; }
+    if (onlyLights && !e.link.light) continue;
+    const time = (e.t - t0).toFixed(3).padStart(9);
+    if (e.kind !== 'att') {
+      out.push(`${time}  ── ${e.kind === 'conn' ? 'connected' : 'disconnected'} ${label(e.link)}${e.kind === 'disc' ? `, reason ${h2(e.reason)}` : ''} ──`);
+      continue;
+    }
+    if (hideKA && isKeepAlive(e.value)) continue;
+    if (e.dir === 'tx') {
+      if (lastTx === null || e.t - lastTx > gap) {
+        steps++;
+        out.push('', `── step ${steps}${lastTx === null ? '' : `, after a ${(e.t - lastTx).toFixed(1)} s pause`} ──`);
+      }
+      lastTx = e.t;
+    }
+    shown++;
+    const m = meaning(e.value, e.link.family);
+    const brief = !fullHex && e.value.length > 40 && m && !m.includes('UNKNOWN');
+    out.push(`${time}  ${e.dir === 'tx' ? '→' : '←'} ${h4(e.link.handle)} ${OPS[e.op].padEnd(2)} ${h4(e.at)}  ` +
+      (brief ? `${hex(e.value, 0, 24)} … (${e.value.length} bytes)` : hex(e.value)));
+    if (m) for (const s of m.split('\n')) out.push(' '.repeat(11) + s);
+  }
+  if (cut) out.push('', `… stopped after ${MAX_LINES} lines. Tick "Only light connections" to shorten the list.`);
+  $('out').textContent = out.join('\n');
+  $('summary').textContent = `${nRecs.toLocaleString()} records over ${(t1 - t0).toFixed(1)} s · ${shown} packets shown in ${steps} step${steps === 1 ? '' : 's'}` +
+    (truncated ? ' · the file ends in an incomplete record, so the end of the trace may be missing' : '');
+}
+
+async function load(file) {
+  if (!file) return;
+  fileName = file.name;
+  try {
+    state = decodeTrace(await file.arrayBuffer());
+    $('out').classList.remove('err');
+    $('copy').disabled = false;
+    render();
+  } catch (err) {
+    state = null;
+    $('out').textContent = err.message;
+    $('out').classList.add('err');
+    $('summary').textContent = '';
+    $('copy').disabled = true;
+  }
+}
+
+$('file').onchange = e => load(e.target.files[0]);
+const drop = $('drop');
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) drop.classList.remove('over'); });
+addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); load(e.dataTransfer.files[0]); });
+for (const id of ['onlyLights', 'hideKA', 'fullHex', 'gap']) $(id).addEventListener('input', render);
+
+$('copy').onclick = async () => {
+  const text = $('out').textContent;
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  $('copy').textContent = 'Copied';
+  setTimeout(() => { $('copy').textContent = 'Copy result'; }, 1500);
+};
+</script>
+</body>
+</html>

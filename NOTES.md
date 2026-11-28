@@ -78,7 +78,7 @@ Packets are 20 bytes: `33 CMD data…`, zero-padded, with byte 19 = XOR of bytes
 - **Nanoleaf Essentials:** proprietary BLE/Thread, so not feasible. A possible workaround is buttons that run iOS Shortcuts (`shortcuts://run-shortcut?name=…`) for lights that are in Apple Home.
 
 ## Open to-dos
-1. Capture one more trace in the Hello Fairy app's DIY: one white bulb, one blank bulb, each motion/direction button, and the brightness slider. Confirm the guesses above.
+1. Capture one more trace in the Hello Fairy app's DIY: one white bulb, one blank bulb, each motion/direction button, and the brightness slider. Confirm the guesses above. Follow the checklist under "Next capture" below.
 2. Map the 26 sections to physical snowflakes (paint section 1, see where it lights).
 3. Delete the Bluetooth logging profile from the iPhone afterwards (Settings → General → VPN & Device Management).
 
@@ -87,5 +87,21 @@ Packets are 20 bytes: `33 CMD data…`, zero-padded, with byte 19 = XOR of bytes
 2. Install Apple's **Bluetooth for iOS** logging profile on the iPhone, then restart the phone.
 3. Plug the iPhone in and choose File → New iOS Trace.
 4. Use the official app, then save the `.pklg` file.
+5. Open **[decode.html](https://pxlcz.github.io/one-remote/decode.html)** and drop the file in. It reads the file locally, keeps only the lights' packets, labels the known commands and starts a new step at each pause. Share the decoded text rather than the `.pklg`, because a raw trace holds all of the phone's Bluetooth traffic.
 
-Decode it by parsing records (little-endian: 4-byte length, 8-byte timestamp, 1-byte type, payload). Types 2 and 3 are ACL TX/RX. Within ACL, L2CAP CID 4 carries ATT; opcode `0x52` is Write Command (handle `0x0009`) and `0x1B` is Notify (handle `0x000B`).
+File format, for decoding by hand: records are little-endian (4-byte length, 8-byte timestamp, 1-byte type, payload); some files are big-endian, and the decoder handles both. Types 2 and 3 are ACL TX/RX. Within ACL, L2CAP CID 4 carries ATT; opcode `0x52` is Write Command (handle `0x0009`) and `0x1B` is Notify (handle `0x000B`).
+
+### Next capture: checklist for to-do 1
+Leave about 5 seconds, hands off, between steps. The decoder starts a new step after each pause, so its steps line up with this list. Close One Remote first, since the curtain accepts only one connection, and check that the logging profile is still on the iPhone.
+
+In the Hello Fairy app:
+1. Open DIY.
+2. Paint section 1 red. This is a known packet, so it confirms the trace lines up.
+3. Paint section 2 white.
+4. Make section 3 blank.
+5. Tap each motion/direction button once, in order, and note the order.
+6. Drag the brightness slider slowly from lowest to highest.
+7. Drag the speed slider from lowest to highest.
+8. Press play, if the app has a play button.
+
+Save the trace, decode it, and send the decoded text along with the button order from step 5.
