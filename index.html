@@ -127,6 +127,7 @@
     <button class="sm" id="fxStop" hidden>Stop</button>
   </div>
   <div>
+    <label class="lbl"><span>Whole lights</span></label>
     <div class="seg" id="fxList">
       <button data-fx="rainbow">Rainbow</button>
       <button data-fx="fade">Fade</button>
@@ -135,14 +136,25 @@
       <button data-fx="xmas">Christmas</button>
       <button data-fx="candle">Candle</button>
     </div>
+  </div>
+  <div>
+    <label class="lbl"><span>Bulb by bulb</span></label>
+    <div class="seg" id="pxList">
+      <button data-fx="wave">Wave</button>
+      <button data-fx="comet">Comet</button>
+      <button data-fx="twinkle">Twinkle</button>
+      <button data-fx="fire">Fire</button>
+      <button data-fx="storm">Storm</button>
+      <button data-fx="candy">Candy cane</button>
+    </div>
     <p class="meta" id="fxHelp" style="margin:6px 0 0">Pick an effect to run it on every light in "All", in step.</p>
   </div>
   <div>
     <label class="lbl"><span>Speed</span><span id="fxSpdV">50%</span></label>
     <input type="range" min="1" max="100" value="50" id="fxSpd">
   </div>
-  <label class="chk"><input type="checkbox" id="fxSpread"> Give each light a different color</label>
-  <p class="meta" style="margin:0">Effects run in this page, like Sound mode, so keep it open. The master brightness dims them. Tap the effect again, or Stop, to end it.</p>
+  <label class="chk"><input type="checkbox" id="fxSpread"> Whole lights: give each light a different color</label>
+  <p class="meta" style="margin:0">Effects run in this page, like Sound mode, so keep it open. The master brightness dims them. Bulb-by-bulb effects set the Hello Fairy's bulbs one at a time through its DIY mode, and the other lights join in as one more bulb at the end of the curtain. Tap the effect again, or Stop, to end it.</p>
 </section>
 
 <section class="card stack" id="sound">
@@ -152,11 +164,12 @@
   </div>
   <div>
     <label class="lbl"><span>Effect</span></label>
-    <div class="seg four" id="sndMode">
+    <div class="seg" id="sndMode">
       <button data-m="pulse" class="sel">Energy</button>
       <button data-m="beats">Rhythm</button>
       <button data-m="roll">Roll</button>
       <button data-m="spectrum">Spectrum</button>
+      <button data-m="meter">Meter</button>
     </div>
     <p class="meta" id="sndHelp" style="margin:6px 0 0">Energy: brightness follows the volume, in the master hue.</p>
   </div>
@@ -824,13 +837,15 @@ const SND_HELP = {
   pulse:'Energy: brightness follows the volume, in the master hue.',
   beats:'Rhythm: jumps to a new color on every kick, then fades.',
   roll:'Roll: colors keep rolling around the wheel, faster when the music is louder.',
-  spectrum:'Spectrum: bass drives red, mids drive green, highs drive blue.' };
+  spectrum:'Spectrum: bass drives red, mids drive green, highs drive blue.',
+  meter:'Meter: the curtain\'s bulbs fill up with the volume, green to red, under a falling peak dot. The other lights pulse in the matching color.' };
 const snd = { rollHue:0, mode:'pulse', src:null, ctx:null, an:null, stream:null, timer:null, data:null,
   level:0, bass:0, mid:0, treb:0, avg:0, lastBeat:0, beatHue:0, flash:0, bpm:120, taps:[], nextBeat:0 };
 
 $('#sndMode').onclick = e => {
   const b = e.target.closest('button'); if(!b) return;
   snd.mode = b.dataset.m;
+  fx.canvas = new Map(); fx.sent = new Map();   // Meter re-enters DIY mode; the other modes resend their color
   $('#sndHelp').textContent = SND_HELP[snd.mode];
   [...$('#sndMode').children].forEach(x => x.classList.toggle('sel', x===b));
 };
@@ -859,6 +874,7 @@ function startBpm(){
 }
 
 function begin(){
+  fx.canvas = new Map(); fx.sent = new Map();
   $('#sndStop').hidden = false;
   $('#micBtn').classList.toggle('live', snd.src==='mic');
   $('#micBtn').textContent = snd.src==='mic' ? '🎤 Listening…' : '🎤 Listen with mic';
@@ -905,6 +921,18 @@ function tick(){
   if (beat){ snd.flash = 1; snd.beatHue = (snd.beatHue + 67 + Math.random()*60) % 360; }
   else snd.flash *= 0.75;
   $('#lvl').style.width = Math.round(snd.level*100) + '%';
+
+  if (snd.mode === 'meter'){
+    // level meter: the curtain's bulbs fill up with the volume (green → red) under a falling peak dot,
+    // and the other lights pulse in the matching color
+    snd.peak = Math.max(snd.level, (snd.peak || 0) - 0.012);
+    const lv = snd.level, pk = snd.peak;
+    drawStrip((px, n) => {
+      const top = Math.min(n - 1, Math.round(pk * (n - 1)));
+      for (let i = 0; i < n; i++) px[i] = [120 - 120*i/Math.max(1, n - 1), 100, i < lv*n ? 1 : (i === top && pk > 0.05 ? 0.6 : 0)];
+    }, () => [120 - 120*lv, 100, Math.max(0.04, lv)]);
+    return;
+  }
 
   // decide output color for this frame
   let h, s, v, rgb;
@@ -953,12 +981,109 @@ const FX_HELP = {
   breathe:'Breathe: brightness rises and falls, in the master hue.',
   xmas:'Christmas: red and green take turns.',
   candle:'Candle: a warm, flickering glow.',
+  wave:'Wave: a rainbow rolls along the curtain, bulb by bulb, and on into the other lights.',
+  comet:'Comet: a bright head with a fading tail races along the curtain and jumps to the other lights, in a new color every lap.',
+  twinkle:'Twinkle: random bulbs sparkle in random colors and fade.',
+  fire:'Fire: flames flicker up the curtain while the other lights glow with the fire.',
+  storm:'Storm: dark blue rain, and lightning that flashes across the curtain and the other lights.',
+  candy:'Candy cane: red and white stripes march along the curtain and through the other lights.',
 };
 const FX_IDLE = 'Pick an effect to run it on every light in "All", in step.';
 const FX_COLORS = [0, 30, 60, 120, 180, 240, 285];   // red, orange, yellow, green, cyan, blue, purple
 const FX_PERIOD = {                                 // seconds per cycle (or per color) at speed 1 → speed 100
   rainbow:[60, 2], fade:[8, 0.8], jump:[4, 0.25], breathe:[10, 1], xmas:[4, 0.3], candle:[0.5, 0.08] };
-const fx = { name:null, timer:null, phase:0, last:0, sent:new Map(), flame:new Map() };
+// Bulb-by-bulb effects draw on a "strip": every Hello Fairy's DIY bulbs in a row, then one pixel per other light
+// (ELK, Govee) at the end. With solo:'mix' the other lights glow with the strip's average color instead.
+// render(px, n, phase, state, speed 0-1) fills px with [hue°, saturation %, value 0-1].
+const PX = {
+  wave:    { period:[20, 1], render(px, n, ph){ for (let i = 0; i < n; i++) px[i] = [((i/n - ph) % 1 + 1) % 1 * 360, 100, 1]; } },
+  comet:   { period:[6, 0.6], render(px, n, ph){
+    const tail = Math.max(3, Math.round(n/4)), lap = Math.floor(ph), head = (ph - lap) * (n + tail), hue = lap * 137.5 % 360;
+    for (let i = 0; i < n; i++){ const d = head - i; px[i] = [hue, 100, d >= 0 && d < tail ? (1 - d/tail) ** 2 : 0]; } } },
+  twinkle: { period:[1, 1], render(px, n, ph, st, k){
+    if (!st.p || st.p.length !== n) st.p = Array.from({length:n}, () => [0, 100, 0]);
+    st.p.forEach((p, i) => {
+      p[2] *= 0.85 - k*0.25;
+      if (Math.random() < 0.01 + k*0.05){ p[0] = Math.random()*360; p[1] = Math.random() < 0.3 ? 0 : 100; p[2] = 1; }
+      px[i] = [...p];
+    }); } },
+  fire:    { period:[1, 1], solo:'mix', render(px, n, ph, st, k){   // after Fire2012: heat cools, rises and sparks
+    if (!st.heat || st.heat.length !== n) st.heat = new Array(n).fill(0);
+    const h = st.heat;
+    for (let step = 0; step <= Math.round(k*2); step++){
+      for (let i = 0; i < n; i++) h[i] = Math.max(0, h[i] - Math.random() * (550/n + 2));
+      for (let i = n - 1; i >= 2; i--) h[i] = (h[i-1] + 2*h[i-2]) / 3;
+      if (Math.random() < 0.5){ const y = Math.floor(Math.random() * Math.min(3, n)); h[y] = Math.min(255, h[y] + 160 + Math.random()*95); }
+    }
+    for (let i = 0; i < n; i++){ const t = h[i] / 255; px[i] = [t * 55, 100, Math.min(1, t * 1.5)]; } } },
+  storm:   { period:[1, 1], render(px, n, ph, st, k){
+    if (!(st.f > 0) && Math.random() < 0.015 + k*0.06){   // new strike: a few fast flickers over part of the strip, or all of it
+      st.f = 2 + Math.floor(Math.random()*4);
+      const len = Math.random() < 0.35 ? n : Math.max(2, Math.floor(n * (0.15 + Math.random()*0.35)));
+      st.a = Math.floor(Math.random() * (n - len + 1)); st.b = st.a + len;
+    }
+    const flash = st.f > 0 && Math.random() < 0.75;
+    if (st.f > 0) st.f--;
+    for (let i = 0; i < n; i++) px[i] = flash && i >= st.a && i < st.b ? [220, 0, 1] : [225, 100, 0.05 + Math.random()*0.05]; } },
+  candy:   { period:[6, 0.5], render(px, n, ph){ for (let i = 0; i < n; i++) px[i] = Math.floor(i/3 + ph*2) % 2 ? [0, 0, 1] : [0, 100, 1]; } },
+};
+const fx = { name:null, timer:null, phase:0, last:0, sent:new Map(), canvas:new Map(), st:{}, flame:new Map() };
+
+const normHue = h => Math.round(((h % 360) + 360) % 360) % 360;
+// one pixel → a Hello Fairy DIY section [hue byte, VAL]: white when unsaturated, blank when dark
+const toDiy = ([h, s, v], dim) => {
+  const val = Math.floor(Math.max(0, Math.min(1, v * dim)) * 250);
+  return val < 3 ? DIY_BLANK : [s < 50 ? DIY_WHITE : hueByte(h), val];
+};
+// a whole-color light: send one color, only when it changed
+function sendSolo(l, [h, s, v], dim){
+  h = normHue(h); v = Math.max(0, Math.min(1, v * dim));
+  const rgb = hsvToRgb(h, s, v*100);
+  const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
+  const key = bytes.join();
+  if (fx.sent.get(l) !== key){ fx.sent.set(l, key); l.sendLatest('fx', bytes); }
+}
+// average color of the first len pixels, brightened so a glow keeps its punch
+function mixColor(px, len){
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < len; i++){ const c = hsvToRgb(normHue(px[i][0]), px[i][1], px[i][2]*100); r += c[0]; g += c[1]; b += c[2]; }
+  const k = 1.8 / Math.max(1, len), [h, s, v] = rgbToHsv(Math.min(255, r*k), Math.min(255, g*k), Math.min(255, b*k));
+  return [h, s, v / 100];
+}
+// paint a Hello Fairy's sections in DIY edit mode, sending only the sections that changed. Frames that
+// arrive while a write is still going out replace each other, so the light never falls behind.
+async function paintFairy(l, cells){
+  let c = fx.canvas.get(l);
+  if (!c) fx.canvas.set(l, c = { sent:[], busy:false, next:null, ready:false });
+  if (c.busy){ c.next = cells; return; }
+  c.busy = true;
+  try {
+    while (cells){
+      if (!c.ready){ l.send(FAIRY.diyMap()); l.send(FAIRY.diyState(0, 100, 0)); l.diyEditing = true; c.ready = true; }
+      const diff = [];
+      cells.forEach(([hb, val], i) => { const o = c.sent[i]; if (!o || o[0] !== hb || o[1] !== val) diff.push([i, hb, val]); });
+      let last;
+      for (const b of FAIRY.diyPaint(diff)) last = l.send(b);
+      diff.forEach(([i, hb, val]) => c.sent[i] = [hb, val]);
+      if (last) await last;
+      cells = c.next; c.next = null;
+    }
+  } finally { c.busy = false; }
+}
+// draw one frame across every light in "All": solo is 'pixel', 'mix', or a function giving the other lights' color
+function drawStrip(render, solo = 'pixel'){
+  const ls = targets().filter(l => l.s.on);
+  const fairies = ls.filter(l => l.type==='fairy'), solos = ls.filter(l => l.type!=='fairy');
+  const bulbs = fairies.reduce((a, l) => a + l.diyN(), 0), len = bulbs || (solo==='pixel' ? 0 : 26);
+  const n = len + (solo==='pixel' ? solos.length : 0);
+  if (!n) return;
+  const px = Array.from({length:n}, () => [0, 0, 0]);
+  render(px, n);
+  const dim = +$('#mBri').value / 100;
+  let at = 0;
+  for (const l of fairies){ const k = l.diyN(); paintFairy(l, px.slice(at, at + k).map(p => toDiy(p, dim))); at += k; }
+  solos.forEach((l, j) => sendSolo(l, solo==='pixel' ? px[len + j] : solo==='mix' ? mixColor(px, len) : solo(), dim));
+}
 
 // [hue°, saturation %, value 0-1] for light i of n at the current phase
 function fxFrame(l, i, n){
@@ -981,37 +1106,32 @@ function fxFrame(l, i, n){
 }
 
 function fxTick(){
-  const now = performance.now(), [slow, fast] = FX_PERIOD[fx.name];
-  fx.phase += (now - fx.last) / 1000 / (slow * Math.pow(fast/slow, (+$('#fxSpd').value - 1) / 99));
+  const now = performance.now(), k = (+$('#fxSpd').value - 1) / 99, e = PX[fx.name];
+  const [slow, fast] = e ? e.period : FX_PERIOD[fx.name];
+  fx.phase += (now - fx.last) / 1000 / (slow * Math.pow(fast/slow, k));
   fx.last = now;
+  if (e){ drawStrip((px, n) => e.render(px, n, fx.phase, fx.st, k), e.solo); return; }
   const dim = +$('#mBri').value / 100, ls = targets().filter(l => l.s.on);
-  ls.forEach((l, i) => {
-    const [h0, s, v0] = fxFrame(l, i, ls.length);
-    const h = Math.round(((h0 % 360) + 360) % 360) % 360, v = Math.max(0, Math.min(1, v0 * dim));
-    const rgb = hsvToRgb(h, s, v*100);
-    const bytes = l.type==='elk' ? ELK.color(...rgb) : l.type==='govee' ? GOVEE.color(...rgb, l.gStyle) : FAIRY.hsv(h, s, Math.max(1, v*100));
-    const key = bytes.join();
-    if (fx.sent.get(l) !== key){ fx.sent.set(l, key); l.sendLatest('fx', bytes); }   // only send changes
-  });
+  ls.forEach((l, i) => sendSolo(l, fxFrame(l, i, ls.length), dim));
 }
 
 function startFx(name){
   stopSound(); lights.forEach(l => l.stopLoop?.(true));
   clearInterval(fx.timer);
-  Object.assign(fx, { name, phase:0, last:performance.now(), sent:new Map(), flame:new Map() });
-  fx.timer = setInterval(fxTick, 100); fxTick();
-  [...$('#fxList').children].forEach(b => b.classList.toggle('sel', b.dataset.fx===name));
+  Object.assign(fx, { name, phase:0, last:performance.now(), sent:new Map(), canvas:new Map(), st:{}, flame:new Map() });
+  fx.timer = setInterval(fxTick, PX[name] ? 70 : 100); fxTick();
+  document.querySelectorAll('#fxCard [data-fx]').forEach(b => b.classList.toggle('sel', b.dataset.fx===name));
   $('#fxHelp').textContent = FX_HELP[name]; $('#fxStop').hidden = false;
   log(`Effect: ${name}`);
 }
 function stopFx(){
   if (!fx.timer) return;
   clearInterval(fx.timer); Object.assign(fx, { name:null, timer:null });
-  [...$('#fxList').children].forEach(b => b.classList.remove('sel'));
+  document.querySelectorAll('#fxCard [data-fx]').forEach(b => b.classList.remove('sel'));
   $('#fxHelp').textContent = FX_IDLE; $('#fxStop').hidden = true;
   log('Effect stopped');
 }
-$('#fxList').onclick = e => { const b = e.target.closest('button'); if (b) b.dataset.fx===fx.name ? stopFx() : startFx(b.dataset.fx); };
+$('#fxCard').addEventListener('click', e => { const b = e.target.closest('[data-fx]'); if (b) b.dataset.fx===fx.name ? stopFx() : startFx(b.dataset.fx); });
 $('#fxStop').onclick = stopFx;
 $('#fxSpd').oninput = e => $('#fxSpdV').textContent = e.target.value + '%';
 

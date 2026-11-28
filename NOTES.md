@@ -20,7 +20,8 @@ Live at **https://pxlcz.github.io/one-remote/** (GitHub Pages, `main` branch, ro
 ## Features in the app
 - **All Lights:** on/off, color swatches, hue, brightness, sleep timer.
 - **Effects:** Rainbow, Fade, Jump, Breathe, Christmas and Candle on every light in All, in step, with a speed slider and an option to give each light a different color. Like Sound mode, the page works out each frame and sends it in each light's own protocol, so different brands stay in sync. The lights' built-in effects can't do that, because each runs on its own controller.
-- **Sound mode:** mic-reactive Energy / Rhythm / Roll / Spectrum, plus a tap-tempo BPM fallback.
+  - **Bulb by bulb:** Wave, Comet, Twinkle, Fire, Storm and Candy cane animate the Hello Fairy's 26 bulbs through DIY edit mode, at up to about 14 frames a second. Only bulbs that changed are sent, and a frame that arrives while a write is still going out replaces the one waiting, so the curtain never falls behind. ELK and Govee lights join in as one more bulb at the end of the curtain; with Fire they glow with the flames' average color.
+- **Sound mode:** mic-reactive Energy / Rhythm / Roll / Spectrum / Meter (the curtain becomes a level meter), plus a tap-tempo BPM fallback.
 - **Per light:** rename, "In All" toggle, color, hue, brightness, raw hex sender (Advanced), Bluetooth log.
 - **ELK:** 22 built-in effects plus speed.
 - **Hello Fairy:** scenes 1–58 (type a number to jump), favorites, scene loop, **DIY per-section painter** with motion, speed, brightness and saved patterns.
