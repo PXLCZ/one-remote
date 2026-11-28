@@ -8,3 +8,5 @@ One web app to control Bluetooth LED lights that normally need separate apps:
 
 Uses Web Bluetooth. On iPhone, open it in the **Bluefy** browser; on Android/desktop use Chrome or Edge.
 Close the official apps first, since each light accepts only one connection.
+
+Full protocol reference and project status: see [NOTES.md](NOTES.md).
