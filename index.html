@@ -163,7 +163,11 @@
       <button data-bake="wave">Wave</button>
       <button data-bake="comet">Comet</button>
     </div>
-    <p class="meta" style="margin:6px 0 0">The curtain scrolls the pattern by itself and the ELK strip runs a matching built-in effect, so both keep going after you close this page (not in step). Speed and ↓ / ↑ change it while it plays.</p>
+    <div class="row space" style="margin-top:8px">
+      <span class="meta">ELK strip</span>
+      <select id="bakeElk" style="width:auto;max-width:70%" aria-label="What the ELK strip does"></select>
+    </div>
+    <p class="meta" style="margin:6px 0 0">The curtain scrolls the pattern by itself and the ELK strip does what you pick, so both keep going after you close this page (not in step). Speed and ↓ / ↑ change it while it plays.</p>
   </div>
   <div>
     <label class="lbl"><span>Speed</span><span id="fxSpdV">50%</span></label>
@@ -1183,7 +1187,7 @@ function bakeOnLights(name){
       l.diyEditing = false;   // always send the order map and edit state first
       l.diyLoad({ cells: Array.from({length:n}, (_, i) => b.cell(i, n)), motion, speed });
       curtains++;
-    } else if (l.type==='elk'){ l.effect(b.elk); l.speed(speed); }
+    } else if (l.type==='elk') applyElk(l, name, speed);
   }
   bake.last = name;
   document.querySelectorAll('#bakeList [data-bake]').forEach(x => x.classList.toggle('sel', x.dataset.bake===name));
@@ -1195,6 +1199,25 @@ function clearBake(){
   bake.last = null;
   document.querySelectorAll('#bakeList [data-bake]').forEach(x => x.classList.remove('sel'));
 }
+// what the ELK strip does while a pattern runs on the curtain: the matching fade, nothing,
+// any of its built-in effects, or a solid color. Remembered in this browser.
+const ELK_SOLIDS = [['Red',0],['Orange',30],['Yellow',55],['Green',120],['Cyan',180],['Blue',230],['Purple',270],['Pink',320],['White',-1]];
+$('#bakeElk').innerHTML = '<option value="match">Match the pattern (a fade in its color)</option><option value="leave">Leave it as it is</option>'
+  + '<optgroup label="Built-in effects">' + ELK_EFFECTS.map(([c, n]) => `<option value="fx:${c}">${n}</option>`).join('') + '</optgroup>'
+  + '<optgroup label="Solid color">' + ELK_SOLIDS.map(([n, h]) => `<option value="solid:${h}">${n}</option>`).join('') + '</optgroup>';
+try { const v = localStorage.getItem('oneRemote.bakeElk'); if (v && $('#bakeElk').querySelector(`option[value="${v}"]`)) $('#bakeElk').value = v; } catch {}
+function applyElk(l, name, speed){
+  const v = $('#bakeElk').value;
+  if (v === 'leave') return;
+  if (v.startsWith('solid:')){ const h = +v.slice(6); l.color(Math.max(0, h), h < 0 ? 0 : 100); return; }
+  l.effect(v.startsWith('fx:') ? +v.slice(3) : BAKE[name].elk);
+  l.speed(speed);
+}
+$('#bakeElk').onchange = e => {
+  try { localStorage.setItem('oneRemote.bakeElk', e.target.value); } catch {}
+  if (!bake.last) return;   // while a pattern plays, change just the strip
+  targets().filter(l => l.s.on && l.type==='elk').forEach(l => applyElk(l, bake.last, clamp(+$('#fxSpd').value, 1, 100)));
+};
 $('#bakeList').onclick = e => { const b = e.target.closest('[data-bake]'); if (b) bakeOnLights(b.dataset.bake); };
 $('#bakeDir').onchange = () => { if (bake.last) bakeOnLights(bake.last); };
 $('#fxSpd').addEventListener('change', () => { if (bake.last && !fx.timer) bakeOnLights(bake.last); });
